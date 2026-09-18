@@ -15,4 +15,4 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/bebehd056-glitch/dlyg
 
 The repository is currently private. GitHub raw URLs are not anonymously accessible while it remains private. To use the raw loader directly, make the repository public or use a private authenticated host.
 
-Current build: click-only silent aim, 25 ms acquisition, 10 ms pre-fire delay, FOV up to 360 degrees, shared partial-head visibility logic for ESP/aim, and no third-person camera.
+Current build: click silent aim + optional Auto Fire, 25 ms acquisition, 10 ms pre-fire delay, FOV up to 360 degrees, shared partial-head visibility logic for ESP/aim, head markers, animated target focus, and no third-person camera.

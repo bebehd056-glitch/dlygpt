@@ -1,11 +1,11 @@
 --[[
-SPECTRA / PLAYER VISUALS v5 — CLICK-ONLY COMBAT
+SPECTRA / PLAYER VISUALS v6 — AUTO FIRE + MODERN VISUALS
 Установка: LocalScript в StarterPlayer > StarterPlayerScripts. RightShift — меню, End — выгрузка.
 
 БОЙ УПРОЩЁН:
-• Только ЛКМ: никаких Auto/Tool/Event/Native режимов.
-• После ЛКМ ждём 25 мс перед захватом цели, затем camera flick, через 10 мс посылается ЛКМ
-  и камера сразу возвращается в сохранённый CFrame.
+• ЛКМ сохранён как основной режим; дополнительно есть Auto Fire по живой видимой цели.
+• ЛКМ/Auto Fire используют один pipeline: 25 мс захват → camera flick → 10 мс → клик → возврат.
+• Auto Fire никогда не кликает в пустоту: только когда найдена живая видимая цель.
 • FOV наведения можно поставить до 360°. Значение 360° разрешает цель в любой стороне от камеры.
 • Перед захватом и непосредственно перед выстрелом повторно проверяются Humanoid, стены и команда.
 • После смерти цель немедленно исключается из ESP/aim; старый Character помечается мёртвым до respawn.
@@ -13,6 +13,7 @@ SPECTRA / PLAYER VISUALS v5 — CLICK-ONLY COMBAT
 ВИДИМОСТЬ:
 • ESP и silent aim используют одинаковую проверку открытой части головы.
   Достаточно видимого края/макушки головы — всё тело видеть не нужно.
+• Добавлены head-dot маркеры и анимированный target-focus для текущей цели.
 
 Тайминги 25/10 мс являются целевыми: фактическое выполнение зависит от FPS/планировщика Roblox.
 Скрипт не вызывает серверные RemoteEvent и не содержит логики конкретного оружия.
@@ -65,9 +66,9 @@ local defaults = {
     Radar = true, RadarRange = 250, Arrows = true, VisibilityColors = true,
     OnlyVisible = false, Tool = true, LookDirection = false, Velocity = false,
     LookLength = 9,
-    SilentAim = true, AimTeamCheck = true, AimFOV = 360,
+    SilentAim = true, AutoFire = false, AimTeamCheck = true, AimFOV = 360,
     AimDistance = 1500, AimPart = "Видимая",
-    DeathShatter = true,
+    HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
 local settings = {}
 for key, value in pairs(defaults) do settings[key] = value end
@@ -354,6 +355,8 @@ slider("Эффекты", "Толщина линий", "Thickness", 1, 3, 0.5, " 
 slider("Эффекты", "Скорость пульса", "PulseSpeed", 0.4, 2.4, 0.1, " Hz")
 toggle("Эффекты", "Цвет по видимости", "VisibilityColors", "Зелёный: виден · терракотовый: за препятствием")
 toggle("Эффекты", "Цвета команд", "TeamColors", "Используются, когда выключен цвет по видимости")
+toggle("Эффекты", "Метка головы", "HeadMarker", "Мини-точка на реально видимой части головы")
+toggle("Эффекты", "Фокус текущей цели", "TargetFocus", "Анимированные углы вокруг цели silent/auto fire")
 do
     local item = row("Эффекты", 62)
     label(item, "Основной цвет", 0, 6, 180, 19, 12)
@@ -375,8 +378,9 @@ toggle("Навигация", "Направление головы", "LookDirecti
 slider("Навигация", "Длина линии взгляда", "LookLength", 3, 24, 1, " st")
 toggle("Навигация", "Движение и скорость", "Velocity", "Вектор движения + скорость в studs/сек")
 
-section("Бой", "Silent aim · только ЛКМ", "25 мс поиск → camera flick → 10 мс → клик → возврат")
-toggle("Бой", "Silent aim", "SilentAim", "Работает только от твоего ЛКМ; стены перепроверяются перед выстрелом")
+section("Бой", "Silent aim + Auto Fire", "Один pipeline: 25 мс поиск → flick → 10 мс → клик → возврат")
+toggle("Бой", "Silent aim", "SilentAim", "ЛКМ использует silent-пайплайн; видимость перепроверяется перед выстрелом")
+toggle("Бой", "Автовыстрел", "AutoFire", "Сам стреляет только когда есть живая видимая цель")
 slider("Бой", "FOV наведения", "AimFOV", 5, 360, 5, "°")
 choices("Бой", "Точка попадания", "AimPart", {"Голова", "Корпус", "Видимая"})
 toggle("Бой", "Не стрелять в союзников", "AimTeamCheck")
@@ -384,8 +388,8 @@ section("Бой", "Эффект смерти", "Мёртвый игрок сра
 toggle("Бой", "Рассыпание модели", "DeathShatter", "Локальный VFX; на aim/ESP не влияет")
 
 local combatKeys = {
-    SilentAim=true, AimTeamCheck=true, AimFOV=true, AimDistance=true,
-    AimPart=true, DeathShatter=true,
+    SilentAim=true, AutoFire=true, AimTeamCheck=true, AimFOV=true, AimDistance=true,
+    AimPart=true, HeadMarker=true, TargetFocus=true, DeathShatter=true,
 }
 local profiles = {
     {Name = "Чистый", Description = "Имена, здоровье, мягкий контур. Меньше деталей.",
@@ -559,6 +563,10 @@ local function newVisuals(player)
     data.Tracer, data.Look = newLine(screen), newLine(screen)
     data.Name, data.Details, data.HPText = espLabel(screen, 12), espLabel(screen, 10), espLabel(screen, 9)
     data.ArrowLabel = espLabel(layer, 10)
+    data.HeadDot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6),
+        BackgroundColor3 = theme.Accent, BorderSizePixel = 0, Visible = false, ZIndex = 5}, screen)
+    corner(data.HeadDot, 3)
+    data.HeadDotStroke = stroke(data.HeadDot, theme.Text, 0.22)
     data.HealthBack = new("Frame", {BackgroundColor3 = Color3.fromRGB(9, 11, 13),
         BorderSizePixel = 0, Visible = false, ZIndex = 3}, screen)
     data.HealthFill = new("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
@@ -681,7 +689,7 @@ local function headSamplePoints(head)
     }
 end
 local function updateVisibility(data, camera, now)
-    if not settings.VisibilityColors and not settings.OnlyVisible then return end
+    if not settings.VisibilityColors and not settings.OnlyVisible and not settings.HeadMarker then return end
     if now < data.RayDue or rayBudget < 1 then return end
     local start = camera.CFrame.Position
     local function clearPoint(point)
@@ -862,11 +870,25 @@ local function updatePlayer(data, camera, origin, now)
     updateRadar(data, camera, origin, color)
     local left, top, right, bottom = bodyRect(data, camera)
     data.Screen.Visible = left ~= nil
-    if not left then updateArrow(data, camera, color) return true end
+    if not left then
+        data.HeadDot.Visible = false
+        updateArrow(data, camera, color)
+        return true
+    end
     for _, line in ipairs(data.Arrow) do hideLine(line) end
     data.ArrowLabel.Visible = false
     drawBox(data, left, top, right, bottom, color)
     local middle, height = (left + right) * 0.5, bottom - top
+    data.HeadDot.Visible = false
+    if settings.HeadMarker and data.VisibleToCamera == true and data.Head and data.Head.Parent then
+        local hp, headOnScreen = camera:WorldToViewportPoint(data.Head.Position)
+        if headOnScreen and hp.Z > 0 then
+            data.HeadDot.Position = UDim2.fromOffset(hp.X, hp.Y)
+            data.HeadDot.BackgroundColor3 = color
+            data.HeadDotStroke.Color = color:Lerp(theme.Text, 0.45)
+            data.HeadDot.Visible = true
+        end
+    end
     data.Name.Visible = settings.Names
     data.Name.Position = UDim2.fromOffset(middle, math.max(2, top - 21))
     data.Name.Text = data.Player.DisplayName == data.Player.Name and data.Player.Name or (data.Player.DisplayName .. "  @" .. data.Player.Name)
@@ -923,8 +945,9 @@ local function startCombat()
     local ACQUIRE_DELAY = 0.025
     local SHOT_DELAY = 0.010
     local TARGET_REFRESH = 0.025
+    local AUTO_FIRE_GAP = 0.085
     local serviceConnections, watchers = {}, {}
-    local candidateDue = 0
+    local candidateDue, autoFireDue = 0, 0
     local currentTarget, currentPart, focused = nil, nil, true
     local pendingAcquire, shot = nil, nil
     local debrisFolder = new("Folder", {Name = "SpectraLocalFragments"}, workspace)
@@ -951,9 +974,18 @@ local function startCombat()
         ZIndex = 6, Visible = false}, overlay)
     corner(reticle, 3)
     local targetMarker = new("Frame", {Name = "AimTarget", BackgroundTransparency = 1,
-        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(10, 10),
-        Rotation = 45, Visible = false, ZIndex = 6}, overlay)
-    stroke(targetMarker, theme.Accent, 0.15)
+        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(30, 30),
+        BorderSizePixel = 0, Visible = false, ZIndex = 14}, overlay)
+    local targetCorners = {}
+    for i = 1, 8 do
+        targetCorners[i] = newLine(targetMarker)
+        targetCorners[i].Core.ZIndex = 16
+        targetCorners[i].Halo.ZIndex = 15
+    end
+    local targetDot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(4, 4),
+        BackgroundColor3 = theme.Accent, BorderSizePixel = 0, ZIndex = 16}, targetMarker)
+    corner(targetDot, 2)
     local combatStatus = label(gui, "", 0, 0, 520, 18, 10, theme.Muted, Enum.Font.Code)
     combatStatus.Name = "CombatStatus"
     combatStatus.AnchorPoint = Vector2.new(0.5, 1)
@@ -1009,10 +1041,6 @@ local function startCombat()
         if settings.AimPart ~= "Голова" and body and body:IsA("BasePart") then result[#result + 1] = body end
         return result
     end
-    local function cameraIsClear(camera, head)
-        local delta = camera.CFrame.Position - head.Position
-        return delta.Magnitude < 0.05 or workspace:Raycast(head.Position, delta, rayParams) == nil
-    end
     local function withinFOV(forward, delta)
         if settings.AimFOV >= 359.5 then return true end
         local halfAngle = math.clamp(settings.AimFOV * 0.5, 0.5, 179.5)
@@ -1020,10 +1048,9 @@ local function startCombat()
     end
     local function findTarget(camera)
         if blocked() then return nil end
-        local _, ownHead = ownCharacter()
-        if not ownHead then return nil end
+        local ownCharacterModel = ownCharacter()
+        if not ownCharacterModel then return nil end
         updateFilter(camera)
-        if not cameraIsClear(camera, ownHead) then return nil end
         local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
         local candidates = {}
         for _, player in ipairs(Players:GetPlayers()) do
@@ -1089,26 +1116,31 @@ local function startCombat()
         return true, "клик"
     end
 
-    local function beginClick()
+    local function beginClick(auto)
         if pendingAcquire or shot or blocked() then return false end
-        pendingAcquire = {At = os.clock() + ACQUIRE_DELAY}
-        controller.Status = "Поиск цели · 25 ms"
+        pendingAcquire = {At = os.clock() + ACQUIRE_DELAY, Auto = auto == true}
+        controller.Status = auto and "Auto · поиск цели · 25 ms" or "Поиск цели · 25 ms"
         return true
     end
 
     local function acquireForShot(camera, now)
         if not pendingAcquire or now < pendingAcquire.At then return end
+        local request = pendingAcquire
         pendingAcquire = nil
         if blocked() then return end
         local player, part, point = findTarget(camera)
         if not player then
+            if request.Auto then
+                controller.Status = "Auto · нет видимой цели"
+                return
+            end
             local fired, reason = virtualClick(camera)
             controller.Status = fired and "Обычный выстрел · клик" or reason
             return
         end
         if not enemyAlive(player) then return end
         shot = {Camera = camera, Original = camera.CFrame, Player = player, Part = part,
-            Point = point, FireAt = now + SHOT_DELAY}
+            Point = point, FireAt = now + SHOT_DELAY, Auto = request.Auto}
         camera.CFrame = CFrame.lookAt(shot.Original.Position, point, shot.Original.UpVector)
         controller.Status = "Цель: " .. player.DisplayName .. " · +10 ms"
     end
@@ -1121,10 +1153,8 @@ local function startCombat()
             return
         end
         updateFilter(camera)
-        local _, ownHead = ownCharacter()
         local point = visiblePointOnPart(shot.Original.Position, shot.Part, shot.Player.Character)
-        local visible = ownHead and cameraIsClear(camera, ownHead) and point ~= nil
-        if not visible then
+        if not point then
             restoreShot(camera, "Стена — отмена")
             return
         end
@@ -1137,14 +1167,16 @@ local function startCombat()
             end
             local fired, reason = virtualClick(camera)
             local name = shot.Player.DisplayName
+            local wasAuto = shot.Auto
             restoreShot(camera)
-            controller.Status = fired and ("Выстрел: " .. name .. " · клик") or reason
+            if wasAuto then autoFireDue = now + AUTO_FIRE_GAP end
+            controller.Status = fired and ((wasAuto and "Auto: " or "Выстрел: ") .. name .. " · клик") or reason
         end
     end
 
     local function fireAction(_, state)
         if state == Enum.UserInputState.Begin and settings.SilentAim and not blocked() then
-            beginClick()
+            beginClick(false)
             return Enum.ContextActionResult.Sink
         end
         if settings.SilentAim and not menuOpen then return Enum.ContextActionResult.Sink end
@@ -1312,6 +1344,7 @@ local function startCombat()
         restoreShot(workspace.CurrentCamera, "Пауза")
         setTarget(nil, nil)
         candidateDue = 0
+        autoFireDue = 0
         targetMarker.Visible = false
         reticle.Visible = false
         combatStatus.Visible = false
@@ -1342,16 +1375,41 @@ local function startCombat()
             end
         end
 
+        if settings.SilentAim and settings.AutoFire and not suspended and not shot and not pendingAcquire
+            and currentTarget and enemyAlive(currentTarget) and now >= autoFireDue then
+            if beginClick(true) then autoFireDue = now + AUTO_FIRE_GAP end
+        end
+
         targetMarker.Visible = false
-        if currentTarget and currentPart and currentPart.Parent and enemyAlive(currentTarget)
+        if settings.TargetFocus and currentTarget and currentPart and currentPart.Parent and enemyAlive(currentTarget)
             and not suspended and not shot then
             local point, visible = camera:WorldToViewportPoint(currentPart.Position)
-            targetMarker.Position = UDim2.fromOffset(point.X, point.Y)
-            targetMarker.Visible = visible and point.Z > 0
+            if visible and point.Z > 0 then
+                targetMarker.Position = UDim2.fromOffset(point.X, point.Y)
+                local pulse = 1 + 0.16 * (0.5 + 0.5 * math.sin(now * 9))
+                local size = 30 * pulse
+                targetMarker.Size = UDim2.fromOffset(size, size)
+                targetDot.BackgroundColor3 = theme.Accent
+                local pad, arm = 2, 8
+                local a = Vector2.new(pad, pad)
+                local b = Vector2.new(size - pad, pad)
+                local c = Vector2.new(size - pad, size - pad)
+                local d = Vector2.new(pad, size - pad)
+                local tc = targetCorners
+                drawLine(tc[1], a, a + Vector2.new(arm, 0), theme.Accent, 1.5)
+                drawLine(tc[2], a, a + Vector2.new(0, arm), theme.Accent, 1.5)
+                drawLine(tc[3], b, b - Vector2.new(arm, 0), theme.Accent, 1.5)
+                drawLine(tc[4], b, b + Vector2.new(0, arm), theme.Accent, 1.5)
+                drawLine(tc[5], c, c - Vector2.new(arm, 0), theme.Accent, 1.5)
+                drawLine(tc[6], c, c - Vector2.new(0, arm), theme.Accent, 1.5)
+                drawLine(tc[7], d, d + Vector2.new(arm, 0), theme.Accent, 1.5)
+                drawLine(tc[8], d, d - Vector2.new(0, arm), theme.Accent, 1.5)
+                targetMarker.Visible = true
+            end
         end
         combatStatus.Visible = settings.SilentAim and not menuOpen
-        combatStatus.Text = string.format("%s  /  CLICK ONLY  /  FIND 25 ms  /  SHOT 10 ms  /  FOV %.0f°",
-            self.Status, settings.AimFOV)
+        combatStatus.Text = string.format("%s  /  %s  /  FIND 25 ms  /  SHOT 10 ms  /  FOV %.0f°",
+            self.Status, settings.AutoFire and "AUTO FIRE" or "CLICK", settings.AimFOV)
 
         effectClock = effectClock + dt
         if effectClock >= 1 / 30 then

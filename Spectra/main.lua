@@ -81,13 +81,14 @@ local defaults = {
     AimRayOrigin = "Camera", VisibilitySampling = "Dense",
     AliveHealthCheck = true, AliveStateCheck = true, AliveAncestryCheck = true,
     AliveRootCheck = true, AliveDeadTags = true,
-    AliveRagdollCheck = true, AliveRagdollConfirmMS = 220,
+    AliveRagdollCheck = true, AliveRagdollConfirmMS = 260, AliveRagdollReleaseMS = 420,
     ThirdPerson = false, ThirdPersonDistance = 8, ThirdPersonShoulder = 0,
     BulletTracers = true, HitLogs = true, HitMarker = true, HitFlash = true,
     HitLogDuration = 2.5, TracerDuration = 0.35,
     AutoFireSource = "Auto",
-    MotionAimSpeed = 240, MotionAimPart = "Visible", MotionRandomization = 18,
-    MotionRandomRefreshMS = 140, MotionFireTolerance = 1.25, MotionActivation = "Hold RMB",
+    MotionAimSpeed = 240, MotionAimAcceleration = 1500, MotionAimTracking = 11,
+    MotionAimPart = "Visible", MotionRandomization = 18,
+    MotionRandomRefreshMS = 180, MotionFireTolerance = 1.25, MotionActivation = "Hold RMB",
     ChamsEnabled = false, ChamsThroughWalls = true, ChamsFill = 36, ChamsOutline = 88,
     ChamsPulse = false, ChamsPulseSpeed = 1.2, ChamsColorMode = "Accent", ChamsRainbowSpeed = 0.12,
     WorldLightingMode = "Game", AuroraSky = false, AuroraIntensity = 55, AuroraSpeed = 0.5,
@@ -109,8 +110,8 @@ local settingRanges = {
     AntiYaw={-180,180}, AntiJitter={0,120}, AntiSpeed={30,720}, AntiPeriod={50,500},
     ThirdPersonDistance={2,24}, ThirdPersonShoulder={-4,4},
     HitLogDuration={0.5,8}, TracerDuration={0.08,1.5},
-    MotionAimSpeed={30,1080}, MotionRandomization={0,100}, MotionRandomRefreshMS={20,1000},
-    MotionFireTolerance={0.1,12},
+    MotionAimSpeed={30,1080}, MotionAimAcceleration={100,6000}, MotionAimTracking={2,30},
+    MotionRandomization={0,100}, MotionRandomRefreshMS={40,1200}, MotionFireTolerance={0.1,12},
     ChamsFill={0,100}, ChamsOutline={0,100}, ChamsPulseSpeed={0.2,5}, ChamsRainbowSpeed={0.02,1},
     AuroraIntensity={5,100}, AuroraSpeed={0.05,3},
     WorldTintStrength={0,100}, WorldSaturation={-100,100}, WorldContrast={-100,100}, WorldBrightness={-100,100},
@@ -118,7 +119,7 @@ local settingRanges = {
     BloomIntensity={0,4}, BloomSize={0,56}, BloomThreshold={0,2}, BlurSize={0,24},
     SunRaysIntensity={0,1}, SunRaysSpread={0,1},
     DOFFarIntensity={0,1}, DOFNearIntensity={0,1}, DOFFocusDistance={1,500}, DOFInFocusRadius={0,250},
-    AliveRagdollConfirmMS={80,600},
+    AliveRagdollConfirmMS={80,900}, AliveRagdollReleaseMS={120,1200},
 }
 local settingChoices = {
     BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
@@ -712,6 +713,8 @@ section("LEGIT","Motion aim",1)
 toggle("LEGIT","Enabled","AimEnabled","Прицел физически ведётся к цели с ограниченной угловой скоростью")
 choices("LEGIT","Activation","MotionActivation",{"Hold RMB","Always"})
 slider("LEGIT","Aim speed","MotionAimSpeed",30,1080,15,"°/s")
+slider("LEGIT","Acceleration","MotionAimAcceleration",100,6000,100,"°/s²")
+slider("LEGIT","Tracking smoothness","MotionAimTracking",2,30,1,"")
 choices("LEGIT","Body selection","MotionAimPart",{"Head","Torso","Visible","Random"})
 slider("LEGIT","Randomization","MotionRandomization",0,100,5,"%")
 slider("LEGIT","Random refresh","MotionRandomRefreshMS",20,1000,20," ms")
@@ -854,10 +857,11 @@ local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,Aim
     FireMethod=true,AimWallCheck=true,AimRayOrigin=true,VisibilitySampling=true,
     AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true,
     AliveHealthCheck=true,AliveStateCheck=true,AliveAncestryCheck=true,AliveRootCheck=true,AliveDeadTags=true,
-    AliveRagdollCheck=true,AliveRagdollConfirmMS=true,
+    AliveRagdollCheck=true,AliveRagdollConfirmMS=true,AliveRagdollReleaseMS=true,
     ThirdPerson=true,ThirdPersonDistance=true,ThirdPersonShoulder=true,
     BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true,
-    AutoFireSource=true,MotionAimSpeed=true,MotionAimPart=true,MotionRandomization=true,
+    AutoFireSource=true,MotionAimSpeed=true,MotionAimAcceleration=true,MotionAimTracking=true,
+    MotionAimPart=true,MotionRandomization=true,
     MotionRandomRefreshMS=true,MotionFireTolerance=true,MotionActivation=true,
     ChamsEnabled=true,ChamsThroughWalls=true,ChamsFill=true,ChamsOutline=true,ChamsPulse=true,
     ChamsPulseSpeed=true,ChamsColorMode=true,ChamsRainbowSpeed=true,
@@ -879,7 +883,8 @@ toggle("CONFIG","Workspace ancestry","AliveAncestryCheck")
 toggle("CONFIG","Head + root exist","AliveRootCheck")
 toggle("CONFIG","Dead/Alive attributes","AliveDeadTags")
 toggle("CONFIG","Ragdoll / corpse posture","AliveRagdollCheck","Мягкая проверка: state + PlatformStand + наклон тела + высота головы")
-slider("CONFIG","Ragdoll confirm","AliveRagdollConfirmMS",80,600,20," ms")
+slider("CONFIG","Ragdoll confirm","AliveRagdollConfirmMS",80,900,20," ms")
+slider("CONFIG","Corpse release","AliveRagdollReleaseMS",120,1200,20," ms")
 section("CONFIG","Visual presets",2)
 for _,profile in ipairs(profiles) do
     local preset=profile

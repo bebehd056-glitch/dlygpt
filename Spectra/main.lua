@@ -1569,7 +1569,8 @@ local function startCombat()
 
     local function updateShot(camera, now)
         if not shot then return end
-        local sourceEnabled = shot.NoFlick and settings.AimEnabled or settings.SilentAim
+        local sourceEnabled = (shot.NoFlick and settings.AimEnabled)
+            or ((not shot.NoFlick) and settings.SilentAim)
         if blocked() or not sourceEnabled or camera ~= shot.Camera or now > shot.Expires
             or (shot.Auto and not settings.AutoFire) or not enemyAlive(shot.Player, shot.Character)
             or not shot.Part:IsDescendantOf(shot.Character) then
@@ -2025,6 +2026,8 @@ cleanup = function()
     combat:Stop()
     thirdPerson:Stop()
     telemetry:Stop()
+    chams:Stop()
+    environment:Stop()
     RunService:UnbindFromRenderStep(RENDER_NAME)
     for _, connection in ipairs(connections) do connection:Disconnect() end
     for _, motion in pairs(activeTweens) do motion:Cancel() end
@@ -2060,9 +2063,11 @@ local function render(dt)
     end
     if (camera.ViewportSize - lastViewport).Magnitude > 0.5 then updateLayout(camera.ViewportSize) end
     local now = os.clock()
+    environment:Update(camera, now)
     thirdPerson:Update()
     combat:Update(dt, camera, now)
     telemetry:Update(camera, now)
+    chams:Update(now)
     local localCharacter = GameAdapter:GetCharacter(localPlayer)
     local localRoot = localCharacter and GameAdapter:GetRoot(localCharacter)
     local origin = localRoot and localRoot.Position or camera.CFrame.Position
@@ -2112,8 +2117,18 @@ function api:SetInputAdapter(adapter)
     creatorInputAdapter=adapter and {Press=adapter.Press,Release=adapter.Release} or nil
     return true
 end
+function api:SetGameAdapter(adapter)
+    if not alive then return false,"Spectra is unloaded" end
+    combat:Pause()
+    local ok, reason = GameAdapter:SetCustom(adapter)
+    if ok then metadataDue = 0 end
+    return ok, reason
+end
 function api:GetState()
-    return {Running=alive,Target=combat.Target,Status=combat.Status,MenuOpen=menuOpen}
+    return {
+        Running=alive,Target=combat.Target,Status=combat.Status,MenuOpen=menuOpen,
+        AutoFireSource=settings.AutoFireSource,WorldMode=settings.WorldLightingMode,
+    }
 end
 function api:OpenMenu(open)
     if alive then setMenuOpen(open ~= false) end

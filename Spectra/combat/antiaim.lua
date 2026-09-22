@@ -14,9 +14,8 @@ return function(ctx)
         if previous.Humanoid and previous.Humanoid.Parent then
             previous.Humanoid.AutoRotate = previous.AutoRotate
         end
-        if previous.Root and previous.Root.Parent then
-            previous.Root.CFrame = CFrame.new(previous.Root.Position) * previous.Rotation
-        end
+        -- Do not snap the root back to an old saved yaw. Roblox/AutoRotate can
+        -- naturally settle the character, avoiding a visible rotation jump on fire.
     end
 
     function api:Update(dt, camera, now, blocked)
@@ -29,7 +28,7 @@ return function(ctx)
         end
         if state and state.Root ~= root then self:Restore() end
         if not state then
-            state = {Humanoid = humanoid, Root = root, AutoRotate = humanoid.AutoRotate, Rotation = root.CFrame.Rotation}
+            state = {Humanoid = humanoid, Root = root, AutoRotate = humanoid.AutoRotate}
         end
         humanoid.AutoRotate = false
         local look = camera.CFrame.LookVector

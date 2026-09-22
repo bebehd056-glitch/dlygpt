@@ -1,22 +1,9 @@
 --[[
-SPECTRA / PLAYER VISUALS v6 — AUTO FIRE + MODERN VISUALS
-Установка: LocalScript в StarterPlayer > StarterPlayerScripts. RightShift — меню, End — выгрузка.
-
-БОЙ УПРОЩЁН:
-• ЛКМ сохранён как основной режим; дополнительно есть Auto Fire по живой видимой цели.
-• ЛКМ/Auto Fire используют один pipeline: 25 мс захват → camera flick → 10 мс → клик → возврат.
-• Auto Fire никогда не кликает в пустоту: только когда найдена живая видимая цель.
-• FOV наведения можно поставить до 360°. Значение 360° разрешает цель в любой стороне от камеры.
-• Перед захватом и непосредственно перед выстрелом повторно проверяются Humanoid, стены и команда.
-• После смерти цель немедленно исключается из ESP/aim; старый Character помечается мёртвым до respawn.
-
-ВИДИМОСТЬ:
-• ESP и silent aim используют одинаковую проверку открытой части головы.
-  Достаточно видимого края/макушки головы — всё тело видеть не нужно.
-• Добавлены head-dot маркеры и анимированный target-focus для текущей цели.
-
-Тайминги 25/10 мс являются целевыми: фактическое выполнение зависит от FPS/планировщика Roblox.
-Скрипт не вызывает серверные RemoteEvent и не содержит логики конкретного оружия.
+SPECTRA v7 — camera silent / regular aim / character anti-aim.
+RightShift: menu. End: unload. Regular aim: hold RMB.
+Client-only. Weapon activation depends on the weapon's input implementation.
+Silent keeps the camera aimed until input release, then restores the view.
+Death is latched per Character; only a new Character resets the latch.
 ]]
 
 local Players = game:GetService("Players")
@@ -68,6 +55,11 @@ local defaults = {
     LookLength = 9,
     SilentAim = true, AutoFire = false, AimTeamCheck = true, AimFOV = 360,
     AimDistance = 1500, AimPart = "Видимая",
+    AimEnabled = false, AimSmooth = 16, TargetPriority = "Прицел",
+    TargetStickiness = 20, AcquireMS = 25, ShotMS = 10, HoldMS = 25,
+    FireInterval = 120, FireMethod = "VirtualUser", AimWallCheck = true,
+    AntiAim = false, AntiMode = "Jitter", AntiYaw = 180,
+    AntiJitter = 55, AntiSpeed = 180, AntiPeriod = 120,
     HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
 local settings = {}
@@ -79,6 +71,18 @@ local metadataDue, statsDue = 0, 0
 local profileName = "Тактический"
 local cleanup
 local deadCharacters = setmetatable({}, {__mode = "k"})
+
+-- A single live predicate is shared by ESP, target selection and shot validation.
+local function liveCharacter(player, expected)
+    local character = player and player.Character
+    if not character or (expected and character ~= expected) or deadCharacters[character]
+        or player.Parent ~= Players or not character:IsDescendantOf(workspace) then return nil end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead then
+        return nil
+    end
+    return character, humanoid
+end
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -378,19 +382,43 @@ toggle("Навигация", "Направление головы", "LookDirecti
 slider("Навигация", "Длина линии взгляда", "LookLength", 3, 24, 1, " st")
 toggle("Навигация", "Движение и скорость", "Velocity", "Вектор движения + скорость в studs/сек")
 
-section("Бой", "Silent aim + Auto Fire", "Один pipeline: 25 мс поиск → flick → 10 мс → клик → возврат")
-toggle("Бой", "Silent aim", "SilentAim", "ЛКМ использует silent-пайплайн; видимость перепроверяется перед выстрелом")
-toggle("Бой", "Автовыстрел", "AutoFire", "Сам стреляет только когда есть живая видимая цель")
-slider("Бой", "FOV наведения", "AimFOV", 5, 360, 5, "°")
-choices("Бой", "Точка попадания", "AimPart", {"Голова", "Корпус", "Видимая"})
+section("Бой", "Наведение", "Silent: ЛКМ · Обычный aim: удерживать ПКМ")
+toggle("Бой", "Silent через камеру", "SilentAim", "Поворот → выстрел → отпускание → возврат камеры")
+toggle("Бой", "Обычный aim", "AimEnabled", "Плавное наведение при удержании ПКМ")
+slider("Бой", "Скорость обычного aim", "AimSmooth", 2, 40, 1, "")
+toggle("Бой", "Автовыстрел", "AutoFire", "Только по живой видимой цели; требует silent")
+toggle("Бой", "Проверка стен", "AimWallCheck", "Проверяется от камеры и головы своего персонажа")
 toggle("Бой", "Не стрелять в союзников", "AimTeamCheck")
-section("Бой", "Эффект смерти", "Мёртвый игрок сразу удаляется из ESP и выбора цели")
-toggle("Бой", "Рассыпание модели", "DeathShatter", "Локальный VFX; на aim/ESP не влияет")
+slider("Бой", "FOV наведения", "AimFOV", 5, 360, 5, "°")
+slider("Бой", "Дальность наведения", "AimDistance", 50, 3000, 50, " st")
+choices("Бой", "Точка попадания", "AimPart", {"Голова", "Корпус", "Видимая"})
+choices("Бой", "Приоритет цели", "TargetPriority", {"Прицел", "Ближайший", "Мало HP"})
+slider("Бой", "Удержание цели", "TargetStickiness", 0, 50, 5, "%")
+section("Бой", "Выстрел", "Tool — Tool:Activate; VirtualUser — виртуальный ЛКМ")
+choices("Бой", "Метод выстрела", "FireMethod", {"Tool", "VirtualUser"})
+slider("Бой", "Задержка захвата", "AcquireMS", 0, 100, 5, " ms")
+slider("Бой", "Задержка после поворота", "ShotMS", 0, 100, 5, " ms")
+slider("Бой", "Удержание выстрела", "HoldMS", 10, 100, 5, " ms")
+slider("Бой", "Интервал автовыстрела", "FireInterval", 60, 1000, 10, " ms")
+section("Бой", "Anti-aim", "Поворот персонажа; видимость другим зависит от сервера")
+toggle("Бой", "Включить anti-aim", "AntiAim")
+choices("Бой", "Режим поворота", "AntiMode", {"Назад", "Jitter", "Spin"})
+slider("Бой", "Смещение yaw", "AntiYaw", -180, 180, 5, "°")
+slider("Бой", "Размах jitter", "AntiJitter", 0, 120, 5, "°")
+slider("Бой", "Период jitter", "AntiPeriod", 50, 500, 10, " ms")
+slider("Бой", "Скорость spin", "AntiSpeed", 30, 720, 30, "°/s")
+section("Бой", "Эффект смерти", "HP ≤ 0 / Dead / удаление Character сразу убирают ESP")
+toggle("Бой", "Рассыпание модели", "DeathShatter", "Локальный эффект смерти")
 
 local combatKeys = {
     SilentAim=true, AutoFire=true, AimTeamCheck=true, AimFOV=true, AimDistance=true,
     AimPart=true, HeadMarker=true, TargetFocus=true, DeathShatter=true,
+    AimEnabled=true, AimSmooth=true, TargetPriority=true, TargetStickiness=true,
+    AcquireMS=true, ShotMS=true, HoldMS=true, FireInterval=true, FireMethod=true,
+    AimWallCheck=true, AntiAim=true, AntiMode=true, AntiYaw=true, AntiJitter=true,
+    AntiSpeed=true, AntiPeriod=true,
 }
+
 local profiles = {
     {Name = "Чистый", Description = "Имена, здоровье, мягкий контур. Меньше деталей.",
         Values = {Boxes = false, Distance = false, Radar = false, Arrows = false,
@@ -645,8 +673,7 @@ local function cacheCharacter(data)
     for index, pair in ipairs(rig) do data.BonePairs[index] = {data.Parts[pair[1]], data.Parts[pair[2]]} end
     local tool = character:FindFirstChildOfClass("Tool")
     data.ToolName = tool and tool.Name or ""
-    data.Eligible = not deadCharacters[character]
-        and data.Humanoid.Health > 0 and character:IsDescendantOf(workspace)
+    data.Eligible = liveCharacter(data.Player, character) ~= nil
 end
 local function updateMetadata(camera, origin, now)
     local candidates = {}
@@ -857,9 +884,14 @@ local function updateRadar(data, camera, origin, color)
 end
 local function updatePlayer(data, camera, origin, now)
     if not settings.Enabled or not data.Eligible or data.Player.Character ~= data.Character
-        or not data.Root or not data.Root.Parent or not data.Head or not data.Head.Parent
+        or not data.Root or not data.Root:IsDescendantOf(data.Character)
+        or not data.Head or not data.Head:IsDescendantOf(data.Character)
         or deadCharacters[data.Character]
-        or not data.Humanoid or data.Humanoid.Health <= 0 then hide(data) return false end
+        or not liveCharacter(data.Player, data.Character) then
+        hide(data)
+        releaseHighlight(data)
+        return false
+    end
     data.DistanceValue = (data.Root.Position - origin).Magnitude
     if data.DistanceValue > settings.MaxDistance or (settings.TeamCheck and isTeammate(data.Player)) then hide(data) return false end
     updateVisibility(data, camera, now)
@@ -942,10 +974,11 @@ end
 local function startCombat()
     local controller = {Running = true, Target = nil, Status = "Готов"}
     local ACTION = GUI_NAME .. "_ClickOnlyFire"
-    local ACQUIRE_DELAY = 0.025
-    local SHOT_DELAY = 0.010
-    local TARGET_REFRESH = 0.025
-    local AUTO_FIRE_GAP = 0.085
+    local TARGET_REFRESH = 0.05
+    local PRE_CAMERA = RENDER_NAME .. "_Restore"
+    local syntheticInput, consumedClick = false, false
+    local pressed, antiState
+    local spinAngle = 0
     local serviceConnections, watchers = {}, {}
     local candidateDue, autoFireDue = 0, 0
     local currentTarget, currentPart, focused = nil, nil, true
@@ -994,11 +1027,10 @@ local function startCombat()
     combatStatus.ZIndex = 6
 
     local function ownCharacter()
-        local character = localPlayer.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local character, humanoid = liveCharacter(localPlayer)
         local head = character and character:FindFirstChild("Head")
-        if not humanoid or humanoid.Health <= 0 or not head or not head:IsA("BasePart") then return nil end
-        return character, head
+        if not head or not head:IsA("BasePart") then return nil end
+        return character, head, humanoid
     end
     local function blocked()
         return not controller.Running or menuOpen or not focused or GuiService.MenuIsOpen
@@ -1009,80 +1041,85 @@ local function startCombat()
         if localPlayer.Character then ignored[#ignored + 1] = localPlayer.Character end
         rayParams.FilterDescendantsInstances = ignored
     end
-    local function enemyAlive(player)
+    local function enemyAlive(player, expected)
         if player == localPlayer or (settings.AimTeamCheck and isTeammate(player)) then return false end
-        local character = player.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        return character and not deadCharacters[character] and character:IsDescendantOf(workspace)
-            and humanoid and humanoid.Health > 0 and not character:FindFirstChildOfClass("ForceField")
+        local character = liveCharacter(player, expected)
+        return character ~= nil and not character:FindFirstChildOfClass("ForceField")
     end
     local function clear(origin, point, character)
         local delta = point - origin
-        if delta.Magnitude < 0.001 then return true end
+        if delta.Magnitude < 0.01 then return true end
         local result = workspace:Raycast(origin, delta, rayParams)
         return not result or result.Instance:IsDescendantOf(character)
     end
-    local function visiblePointOnPart(origin, part, character)
-        if not part or not part:IsA("BasePart") then return nil end
-        if part.Name ~= "Head" then
-            return clear(origin, part.Position, character) and part.Position or nil
-        end
-        for _, point in ipairs(headSamplePoints(part)) do
-            if clear(origin, point, character) then return point end
+    local function visiblePointOnPart(origin, part, character, forceWalls)
+        if not part or not part:IsA("BasePart") or not part:IsDescendantOf(character) then return nil end
+        local _, head = ownCharacter()
+        if not head then return nil end
+        local samples = part.Name == "Head" and headSamplePoints(part) or {part.Position}
+        for _, point in ipairs(samples) do
+            if not (forceWalls or settings.AimWallCheck)
+                or (clear(origin, point, character) and clear(head.Position, point, character)) then
+                return point
+            end
         end
         return nil
     end
     local function points(character)
+        local result = {}
         local head = character:FindFirstChild("Head")
         local body = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
             or character:FindFirstChild("HumanoidRootPart")
-        local result = {}
         if settings.AimPart ~= "Корпус" and head and head:IsA("BasePart") then result[#result + 1] = head end
         if settings.AimPart ~= "Голова" and body and body:IsA("BasePart") then result[#result + 1] = body end
         return result
     end
     local function withinFOV(forward, delta)
-        if settings.AimFOV >= 359.5 then return true end
-        local halfAngle = math.clamp(settings.AimFOV * 0.5, 0.5, 179.5)
-        return forward:Dot(delta.Unit) >= math.cos(math.rad(halfAngle))
+        if delta.Magnitude < 0.05 then return false end
+        return settings.AimFOV >= 359.5
+            or forward:Dot(delta.Unit) >= math.cos(math.rad(settings.AimFOV * 0.5))
     end
-    local function findTarget(camera)
+    local function validPoint(camera, part, character, forceWalls)
+        local delta = part.Position - camera.CFrame.Position
+        if delta.Magnitude > settings.AimDistance or not withinFOV(camera.CFrame.LookVector, delta) then return nil end
+        local point = visiblePointOnPart(camera.CFrame.Position, part, character, forceWalls)
+        if point and withinFOV(camera.CFrame.LookVector, point - camera.CFrame.Position)
+            and (point - camera.CFrame.Position).Magnitude <= settings.AimDistance then return point end
+        return nil
+    end
+    local function findTarget(camera, forceWalls)
         if blocked() then return nil end
-        local ownCharacterModel = ownCharacter()
-        if not ownCharacterModel then return nil end
         updateFilter(camera)
         local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
         local candidates = {}
         for _, player in ipairs(Players:GetPlayers()) do
             if enemyAlive(player) then
-                local options, score = points(player.Character), math.huge
-                for _, part in ipairs(options) do
+                local character, humanoid = liveCharacter(player)
+                local options, score = {}, math.huge
+                for _, part in ipairs(points(character)) do
                     local delta = part.Position - origin
                     local distance = delta.Magnitude
                     if distance > 0.05 and distance <= settings.AimDistance and withinFOV(forward, delta) then
-                        local value = 1 - forward:Dot(delta / distance)
-                        if player == currentTarget then value = value * 0.85 end
+                        local value = 1 - math.clamp(forward:Dot(delta.Unit), -1, 1)
+                        if settings.TargetPriority == "Ближайший" then value = distance / settings.AimDistance end
+                        if settings.TargetPriority == "Мало HP" then value = humanoid.Health end
+                        if player == currentTarget then value = value * (1 - settings.TargetStickiness / 100) end
                         score = math.min(score, value)
+                        options[#options + 1] = part
                     end
                 end
-                if score < math.huge then candidates[#candidates + 1] = {Player = player, Points = options, Score = score} end
+                if #options > 0 then candidates[#candidates + 1] = {Player=player, Character=character, Points=options, Score=score} end
             end
         end
         table.sort(candidates, function(a, b)
             if a.Score == b.Score then return a.Player.UserId < b.Player.UserId end
             return a.Score < b.Score
         end)
-        for index = 1, math.min(6, #candidates) do
-            local candidate = candidates[index]
+        -- Do not discard visible targets merely because six closer candidates are behind walls.
+        for _, candidate in ipairs(candidates) do
             for _, part in ipairs(candidate.Points) do
-                local delta = part.Position - origin
-                if delta.Magnitude > 0.05 and delta.Magnitude <= settings.AimDistance
-                    and withinFOV(forward, delta) then
-                    local visiblePoint = visiblePointOnPart(origin, part, candidate.Player.Character)
-                    if visiblePoint then
-                        return candidate.Player, part, visiblePoint
-                    end
-                end
+                local point = validPoint(camera, part, candidate.Character, forceWalls)
+                if point then return candidate.Player, part, point end
             end
         end
         return nil
@@ -1091,116 +1128,173 @@ local function startCombat()
         currentTarget, currentPart = player, part
         controller.Target = player
     end
-    local function restoreShot(camera, status)
-        if shot and camera and shot.Camera == camera then camera.CFrame = shot.Original end
-        shot = nil
-        if status then controller.Status = status end
-    end
-
-    local bindFireAction
-    local function virtualClick(camera)
-        ContextActionService:UnbindAction(ACTION)
-        local position = UserInputService:GetMouseLocation()
-        local downOk, downError = pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(position, camera.CFrame)
+    local function releaseInput()
+        local input = pressed
+        pressed = nil
+        if not input then return end
+        syntheticInput = true
+        local ok, err = pcall(function()
+            if input.Tool then input.Tool:Deactivate()
+            else VirtualUser:Button1Up(input.Position, input.Camera.CFrame) end
         end)
-        task.delay(0.025, function()
-            pcall(function()
-                local currentCamera = workspace.CurrentCamera
-                VirtualUser:Button1Up(position, currentCamera and currentCamera.CFrame or camera.CFrame)
-            end)
-            if controller.Running then bindFireAction() end
-        end)
-        if not downOk then return false, "Виртуальный ЛКМ недоступен: " .. tostring(downError) end
-        return true, "клик"
+        syntheticInput = false
+        if not ok then warn("Spectra input release: " .. tostring(err)) end
     end
-
-    local function beginClick(auto)
-        if pendingAcquire or shot or blocked() then return false end
-        pendingAcquire = {At = os.clock() + ACQUIRE_DELAY, Auto = auto == true}
-        controller.Status = auto and "Auto · поиск цели · 25 ms" or "Поиск цели · 25 ms"
+    local function pressInput(camera)
+        if pressed then return false, "Выстрел уже удерживается" end
+        local character = ownCharacter()
+        local tool = character and character:FindFirstChildOfClass("Tool")
+        if settings.FireMethod == "Tool" and (not tool or not tool.Enabled) then
+            return false, "Нет активного Tool; проверь метод выстрела"
+        end
+        local input = settings.FireMethod == "Tool" and {Tool=tool}
+            or {Position=UserInputService:GetMouseLocation(), Camera=camera}
+        pressed = input
+        syntheticInput = true
+        local ok, err = pcall(function()
+            if input.Tool then input.Tool:Activate()
+            else
+                VirtualUser:CaptureController()
+                VirtualUser:Button1Down(input.Position, camera.CFrame)
+            end
+        end)
+        syntheticInput = false
+        if not ok then releaseInput() return false, "Метод недоступен: " .. tostring(err) end
         return true
     end
-
+    local function restoreShot(_, status)
+        local previous = shot
+        releaseInput()
+        shot = nil
+        if previous and previous.Camera and previous.Applied then
+            pcall(function() previous.Camera.CFrame = previous.Base end)
+        end
+        if status then controller.Status = status end
+    end
+    -- Restore before Roblox's camera controller, so mouse movement during a shot is preserved.
+    RunService:BindToRenderStep(PRE_CAMERA, Enum.RenderPriority.Camera.Value - 1, function()
+        if shot and shot.Applied then
+            shot.Camera.CFrame = shot.Base
+            shot.Applied = false
+        end
+    end)
+    local function restoreAnti()
+        local previous = antiState
+        antiState = nil
+        if not previous then return end
+        if previous.Humanoid.Parent then previous.Humanoid.AutoRotate = previous.AutoRotate end
+        if previous.Root.Parent then previous.Root.CFrame = CFrame.new(previous.Root.Position) * previous.Rotation end
+    end
+    local function updateAnti(dt, camera, now)
+        local character, _, humanoid = ownCharacter()
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not settings.AntiAim or blocked() or shot or pendingAcquire
+            or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            or not root or not root:IsA("BasePart") or root.Anchored or humanoid.Sit
+            or humanoid.PlatformStand then restoreAnti() return end
+        if antiState and antiState.Root ~= root then restoreAnti() end
+        if not antiState then
+            antiState = {Humanoid=humanoid, Root=root, AutoRotate=humanoid.AutoRotate, Rotation=root.CFrame.Rotation}
+        end
+        humanoid.AutoRotate = false
+        local look = camera.CFrame.LookVector
+        local yaw = math.atan2(-look.X, -look.Z) + math.rad(settings.AntiYaw)
+        if settings.AntiMode == "Jitter" then
+            local sign = math.floor(now / (settings.AntiPeriod / 1000)) % 2 == 0 and 1 or -1
+            yaw = yaw + math.rad(settings.AntiJitter) * sign
+        elseif settings.AntiMode == "Spin" then
+            spinAngle = (spinAngle + math.rad(settings.AntiSpeed) * dt) % (math.pi * 2)
+            yaw = yaw + spinAngle
+        end
+        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, yaw, 0)
+    end
+    local function beginClick(auto, player, part)
+        if pendingAcquire or shot or blocked() or not settings.SilentAim then return false end
+        if auto and os.clock() < autoFireDue then return false end
+        pendingAcquire = {At=os.clock() + settings.AcquireMS / 1000, Auto=auto == true,
+            Player=player, Character=player.Character, Part=part}
+        restoreAnti()
+        return true
+    end
     local function acquireForShot(camera, now)
         if not pendingAcquire or now < pendingAcquire.At then return end
         local request = pendingAcquire
         pendingAcquire = nil
-        if blocked() then return end
-        local player, part, point = findTarget(camera)
-        if not player then
-            if request.Auto then
-                controller.Status = "Auto · нет видимой цели"
-                return
-            end
-            local fired, reason = virtualClick(camera)
-            controller.Status = fired and "Обычный выстрел · клик" or reason
-            return
-        end
-        if not enemyAlive(player) then return end
-        shot = {Camera = camera, Original = camera.CFrame, Player = player, Part = part,
-            Point = point, FireAt = now + SHOT_DELAY, Auto = request.Auto}
-        camera.CFrame = CFrame.lookAt(shot.Original.Position, point, shot.Original.UpVector)
-        controller.Status = "Цель: " .. player.DisplayName .. " · +10 ms"
+        if blocked() or not settings.SilentAim or (request.Auto and not settings.AutoFire)
+            or not enemyAlive(request.Player, request.Character) then return end
+        updateFilter(camera)
+        local point = request.Part and request.Part:IsDescendantOf(request.Character)
+            and validPoint(camera, request.Part, request.Character, request.Auto)
+        if not point then controller.Status = "Цель потеряна" return end
+        shot = {Camera=camera, Base=camera.CFrame, Player=request.Player, Character=request.Character,
+            Part=request.Part, Point=point, FireAt=now + settings.ShotMS / 1000, Auto=request.Auto,
+            Phase="Aim", Expires=now + 1}
+        setTarget(request.Player, request.Part)
     end
-
     local function updateShot(camera, now)
         if not shot then return end
-        if blocked() or camera ~= shot.Camera or not enemyAlive(shot.Player)
-            or not shot.Part or not shot.Part.Parent then
-            restoreShot(camera, "Выстрел отменён")
-            return
+        if blocked() or not settings.SilentAim or camera ~= shot.Camera or now > shot.Expires
+            or (shot.Auto and not settings.AutoFire) or not enemyAlive(shot.Player, shot.Character)
+            or not shot.Part:IsDescendantOf(shot.Character) then
+            restoreShot(camera, "Выстрел отменён") return
         end
+        -- Base is the camera controller's fresh view, never last frame's flick.
+        shot.Base = camera.CFrame
         updateFilter(camera)
-        local point = visiblePointOnPart(shot.Original.Position, shot.Part, shot.Player.Character)
-        if not point then
-            restoreShot(camera, "Стена — отмена")
-            return
-        end
-        shot.Point = point
-        camera.CFrame = CFrame.lookAt(shot.Original.Position, point, shot.Original.UpVector)
-        if now >= shot.FireAt then
-            if not enemyAlive(shot.Player) then
-                restoreShot(camera, "Цель уже мертва")
-                return
+        local point = validPoint(camera, shot.Part, shot.Character, shot.Auto)
+        if not point then restoreShot(camera, "Цель скрылась / вне FOV") return end
+        camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+        shot.Applied = true
+        if shot.Phase == "Aim" and now >= shot.FireAt then
+            local activeShot = shot
+            local fired, reason = pressInput(camera)
+            -- Tool callbacks can synchronously kill a target and cancel this shot.
+            if shot ~= activeShot then releaseInput() return end
+            if not fired then
+                autoFireDue = now + 0.5
+                restoreShot(camera, reason) return
             end
-            local fired, reason = virtualClick(camera)
-            local name = shot.Player.DisplayName
-            local wasAuto = shot.Auto
+            shot.Phase = "Hold"
+            shot.ReleaseAt = now + settings.HoldMS / 1000
+            autoFireDue = now + settings.FireInterval / 1000
+            controller.Status = "Ввод отправлен: " .. shot.Player.DisplayName
+        elseif shot.Phase == "Hold" and now >= shot.ReleaseAt then
             restoreShot(camera)
-            if wasAuto then autoFireDue = now + AUTO_FIRE_GAP end
-            controller.Status = fired and ((wasAuto and "Auto: " or "Выстрел: ") .. name .. " · клик") or reason
         end
     end
-
     local function fireAction(_, state)
-        if state == Enum.UserInputState.Begin and settings.SilentAim and not blocked() then
-            beginClick(false)
+        if syntheticInput then return Enum.ContextActionResult.Pass end
+        if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+            local consumed = consumedClick
+            consumedClick = false
+            return consumed and Enum.ContextActionResult.Sink or Enum.ContextActionResult.Pass
+        end
+        if state ~= Enum.UserInputState.Begin or not settings.SilentAim or blocked() then
+            return Enum.ContextActionResult.Pass
+        end
+        if shot or pendingAcquire then consumedClick = true return Enum.ContextActionResult.Sink end
+        local camera = workspace.CurrentCamera
+        if not camera then return Enum.ContextActionResult.Pass end
+        local player, part = findTarget(camera, false)
+        -- A normal click stays normal when there is no valid target.
+        if player and beginClick(false, player, part) then
+            consumedClick = true
             return Enum.ContextActionResult.Sink
         end
-        if settings.SilentAim and not menuOpen then return Enum.ContextActionResult.Sink end
         return Enum.ContextActionResult.Pass
     end
-    bindFireAction = function()
-        ContextActionService:UnbindAction(ACTION)
-        ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000,
-            Enum.UserInputType.MouseButton1)
+    ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000, Enum.UserInputType.MouseButton1)
+    local function suspend()
+        pendingAcquire = nil
+        restoreShot(workspace.CurrentCamera, "Пауза")
+        restoreAnti()
+        setTarget(nil, nil)
+        targetMarker.Visible = false
     end
-    bindFireAction()
-
-    bind(UserInputService.WindowFocusReleased, function()
-        focused = false
-        pendingAcquire = nil
-        restoreShot(workspace.CurrentCamera, "Пауза")
-        setTarget(nil, nil)
-    end)
+    bind(UserInputService.WindowFocusReleased, function() focused = false suspend() end)
     bind(UserInputService.WindowFocused, function() focused = true end)
-    bind(UserInputService.TextBoxFocused, function()
-        pendingAcquire = nil
-        restoreShot(workspace.CurrentCamera, "Пауза")
-        setTarget(nil, nil)
-    end)
+    bind(UserInputService.TextBoxFocused, suspend)
 
     local function release(entry)
         local part = entry.Part
@@ -1278,7 +1372,7 @@ local function startCombat()
     end
 
     local function markDead(player, character)
-        if not character or deadCharacters[character] then return end
+        if not character then return end
         deadCharacters[character] = true
         local data = visuals[player]
         if data and data.Character == character then
@@ -1287,51 +1381,88 @@ local function startCombat()
             hide(data)
             releaseHighlight(data)
         end
-        if currentTarget == player then setTarget(nil, nil) end
-        if shot and shot.Player == player then restoreShot(workspace.CurrentCamera, "Цель умерла") end
-        pendingAcquire = nil
+        if currentTarget == player then
+            setTarget(nil, nil)
+            targetMarker.Visible = false
+        end
+        if shot and shot.Character == character then restoreShot(workspace.CurrentCamera, "Цель умерла") end
+        if pendingAcquire and pendingAcquire.Character == character then pendingAcquire = nil end
+        if player == localPlayer then suspend() end
+        metadataDue, candidateDue = 0, 0
     end
-
     local function watch(player)
         if watchers[player] then return end
-        local record = {Life = {}}
+        local record = {Life={}, HumanoidConnections={}}
         watchers[player] = record
-        local function attach(character)
+        local function clearLife()
             disconnect(record.Life)
+            disconnect(record.HumanoidConnections)
+            record.Life, record.HumanoidConnections = {}, {}
+            record.Humanoid = nil
+        end
+        local function attach(character)
+            clearLife()
             if record.Character then restoreBody(record.Character) end
-            record.Life = {}
-            record.Character = character
-            record.Shattered = false
-            deadCharacters[character] = nil
-            local attachedHumanoid
-            local function attachHumanoid(humanoid)
-                if attachedHumanoid or not humanoid:IsA("Humanoid") then return end
-                attachedHumanoid = humanoid
-                local function onDead()
-                    local first = not deadCharacters[character]
-                    markDead(player, character)
-                    if first and not record.Shattered then
-                        record.Shattered = true
-                        disintegrate(character)
-                    end
+            record.Character, record.Shattered = character, false
+            metadataDue = 0
+            local function onDead()
+                if record.Character ~= character then return end
+                local first = not deadCharacters[character]
+                markDead(player, character)
+                if first and not record.Shattered then
+                    record.Shattered = true
+                    disintegrate(character)
                 end
-                record.Life[#record.Life + 1] = humanoid.HealthChanged:Connect(function(health)
-                    if health <= 0 then onDead() end
-                end)
-                record.Life[#record.Life + 1] = humanoid.Died:Connect(onDead)
             end
+            record.OnDead = onDead
+            local function attachHumanoid(humanoid)
+                if not humanoid:IsA("Humanoid") or record.Humanoid == humanoid then return end
+                disconnect(record.HumanoidConnections)
+                record.HumanoidConnections = {}
+                record.Humanoid = humanoid
+                local function check()
+                    if humanoid.Health <= 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead then onDead() end
+                end
+                local list = record.HumanoidConnections
+                list[#list + 1] = humanoid.HealthChanged:Connect(check)
+                list[#list + 1] = humanoid.Died:Connect(onDead)
+                list[#list + 1] = humanoid.StateChanged:Connect(check)
+                check() -- Handles a corpse that existed before Spectra was loaded.
+            end
+            record.Life[#record.Life + 1] = character.ChildAdded:Connect(attachHumanoid)
+            record.Life[#record.Life + 1] = character.ChildRemoved:Connect(function(child)
+                if child == record.Humanoid then
+                    disconnect(record.HumanoidConnections)
+                    record.HumanoidConnections, record.Humanoid = {}, nil
+                    local data = visuals[player]
+                    if data then hide(data) releaseHighlight(data) end
+                    metadataDue = 0
+                    local nextHumanoid = character:FindFirstChildOfClass("Humanoid")
+                    if nextHumanoid then attachHumanoid(nextHumanoid) end
+                end
+            end)
             local humanoid = character:FindFirstChildOfClass("Humanoid")
             if humanoid then attachHumanoid(humanoid) end
-            record.Life[#record.Life + 1] = character.ChildAdded:Connect(attachHumanoid)
         end
         record.Spawn = player.CharacterAdded:Connect(attach)
+        record.Removing = player.CharacterRemoving:Connect(function(character)
+            markDead(player, character)
+            if record.Character == character then
+                clearLife()
+                restoreBody(character)
+                record.Character, record.OnDead = nil, nil
+            end
+        end)
         if player.Character then attach(player.Character) end
     end
     local function unwatch(player)
         local record = watchers[player]
         if not record then return end
+        markDead(player, record.Character)
         record.Spawn:Disconnect()
+        record.Removing:Disconnect()
         disconnect(record.Life)
+        disconnect(record.HumanoidConnections)
         if record.Character then restoreBody(record.Character) end
         watchers[player] = nil
     end
@@ -1342,6 +1473,7 @@ local function startCombat()
     function controller:Pause()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
+        restoreAnti()
         setTarget(nil, nil)
         candidateDue = 0
         autoFireDue = 0
@@ -1353,31 +1485,56 @@ local function startCombat()
     function controller:Update(dt, camera, now)
         if not self.Running then return end
         smoothFPS = smoothFPS + (1 / math.max(dt, 0.001) - smoothFPS) * math.min(dt * 3, 1)
+        -- Events hide immediately; polling catches missed/deferred health and state events.
+        for _, record in pairs(watchers) do
+            local h = record.Humanoid
+            if h and record.OnDead and not deadCharacters[record.Character]
+                and (h.Health <= 0 or h:GetState() == Enum.HumanoidStateType.Dead) then record.OnDead() end
+        end
         local suspended = blocked()
-        reticle.Visible = settings.SilentAim and not suspended
+        local aiming = settings.SilentAim or settings.AimEnabled
+        reticle.Visible = aiming and not suspended
         if suspended then
-            pendingAcquire = nil
-            restoreShot(camera, "Пауза")
-            setTarget(nil, nil)
+            suspend()
         else
+            if not settings.SilentAim then
+                pendingAcquire = nil
+                restoreShot(camera)
+            end
             acquireForShot(camera, now)
             if shot then
                 updateShot(camera, now)
-            elseif settings.SilentAim and now >= candidateDue then
-                local player, part = findTarget(camera)
-                setTarget(player, part)
-                candidateDue = now + TARGET_REFRESH
-                self.Status = player and ("Цель: " .. player.DisplayName) or "Нет видимой цели"
-            elseif not settings.SilentAim then
-                pendingAcquire = nil
-                setTarget(nil, nil)
-                self.Status = "Наведение выключено"
+            else
+                if aiming and now >= candidateDue then
+                    local player, part = findTarget(camera, settings.AutoFire and settings.SilentAim)
+                    setTarget(player, part)
+                    candidateDue = now + TARGET_REFRESH
+                elseif not aiming then
+                    setTarget(nil, nil)
+                end
+                if currentTarget then
+                    updateFilter(camera)
+                    local character = currentTarget.Character
+                    local point = enemyAlive(currentTarget) and currentPart and character
+                        and currentPart:IsDescendantOf(character)
+                        and validPoint(camera, currentPart, character, settings.AutoFire and settings.SilentAim)
+                    if not point then
+                        setTarget(nil, nil)
+                        candidateDue = 0
+                    elseif settings.AimEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                        local alpha = 1 - math.exp(-settings.AimSmooth * math.min(dt, 0.1))
+                        local desired = CFrame.lookAt(camera.CFrame.Position, point, camera.CFrame.UpVector)
+                        camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+                    end
+                end
+                if settings.SilentAim and settings.AutoFire and not pendingAcquire
+                    and currentTarget and now >= autoFireDue then
+                    if beginClick(true, currentTarget, currentPart) then
+                        autoFireDue = now + settings.FireInterval / 1000
+                    end
+                end
             end
-        end
-
-        if settings.SilentAim and settings.AutoFire and not suspended and not shot and not pendingAcquire
-            and currentTarget and enemyAlive(currentTarget) and now >= autoFireDue then
-            if beginClick(true) then autoFireDue = now + AUTO_FIRE_GAP end
+            updateAnti(dt, camera, now)
         end
 
         targetMarker.Visible = false
@@ -1407,9 +1564,9 @@ local function startCombat()
                 targetMarker.Visible = true
             end
         end
-        combatStatus.Visible = settings.SilentAim and not menuOpen
-        combatStatus.Text = string.format("%s  /  %s  /  FIND 25 ms  /  SHOT 10 ms  /  FOV %.0f°",
-            self.Status, settings.AutoFire and "AUTO FIRE" or "CLICK", settings.AimFOV)
+        combatStatus.Visible = (settings.SilentAim or settings.AimEnabled or settings.AntiAim) and not menuOpen
+        combatStatus.Text = string.format("%s / %s / %s / FOV %.0f°",
+            self.Status, settings.FireMethod, settings.AutoFire and "AUTO" or "CLICK", settings.AimFOV)
 
         effectClock = effectClock + dt
         if effectClock >= 1 / 30 then
@@ -1444,7 +1601,9 @@ local function startCombat()
         self.Running = false
         pendingAcquire = nil
         ContextActionService:UnbindAction(ACTION)
+        RunService:UnbindFromRenderStep(PRE_CAMERA)
         restoreShot(workspace.CurrentCamera)
+        restoreAnti()
         disconnect(serviceConnections)
         for player in pairs(watchers) do unwatch(player) end
         for character in pairs(hiddenBodies) do restoreBody(character) end
@@ -1473,7 +1632,7 @@ cleanup = function()
 end
 connect(shutdown.Event, cleanup)
 connect(gui.Destroying, cleanup)
-connect(script.Destroying, cleanup)
+if typeof(script) == "Instance" then connect(script.Destroying, cleanup) end
 connect(Players.PlayerAdded, addPlayer)
 connect(Players.PlayerRemoving, removePlayer)
 for _, player in ipairs(Players:GetPlayers()) do addPlayer(player) end

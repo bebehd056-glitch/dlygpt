@@ -27,6 +27,18 @@ return function(ctx)
         return player and player.Character or nil
     end
 
+    function api:GetCharacterAddedSignal(player)
+        local value, handled = call("GetCharacterAddedSignal", player)
+        if handled then return value end
+        return player and player.CharacterAdded or nil
+    end
+
+    function api:GetCharacterRemovingSignal(player)
+        local value, handled = call("GetCharacterRemovingSignal", player)
+        if handled then return value end
+        return player and player.CharacterRemoving or nil
+    end
+
     function api:GetPlayerFromCharacter(character)
         local value, handled = call("GetPlayerFromCharacter", character)
         if handled then return value end

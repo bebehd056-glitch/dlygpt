@@ -12,7 +12,8 @@ loader = (ROOT / "loader.lua").read_text(encoding="utf-8")
 required_modules = {
     "core/game_adapter.lua": ["function api:GetCharacter", "function api:SetCustom", "GetAimParts",
                               "GetCharacterAddedSignal", "GetCharacterRemovingSignal"],
-    "core/alive.lua": ["function api:IsAlive", "AliveDeadTags", "Adapter"],
+    "core/alive.lua": ["function api:IsAlive", "AliveDeadTags", "AliveRagdollCheck",
+                       "postureLooksDead", "record.Next = now + 0.12", "signals >= 3"],
     "core/visibility.lua": ["function api:FindVisiblePoint", "VisibilitySampling"],
     "combat/targeting.lua": ["function api:Find", "partMode", "adapter:GetAimParts"],
     "combat/motion_aim.lua": ["MotionAimSpeed", "MotionRandomization", "function api:IsAligned"],
@@ -61,6 +62,8 @@ check('WorldDOF = false' in main, "DOF default missing")
 check('AliveHealthCheck = true' in main, "alive health toggle missing")
 check('AliveStateCheck = true' in main, "alive state toggle missing")
 check('AliveDeadTags = true' in main, "dead-tag toggle missing")
+check('AliveRagdollCheck = true' in main, "ragdoll posture toggle missing")
+check('AliveRagdollConfirmMS = 220' in main, "ragdoll confirmation default missing")
 check('ThirdPerson = false' in main, "third-person setting missing")
 check('BulletTracers = true' in main and 'HitLogs = true' in main, "telemetry defaults missing")
 

@@ -29,6 +29,21 @@ if oldGui then
 end
 
 local startup = type(_G.SpectraOptions) == "table" and _G.SpectraOptions or {}
+local MODULE_ROOT = type(startup.ModuleRoot) == "string" and startup.ModuleRoot
+    or "https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/main/Spectra/"
+local moduleCache = {}
+local function importModule(path)
+    if moduleCache[path] then return moduleCache[path] end
+    local ok, source = pcall(function() return game:HttpGet(MODULE_ROOT .. path, true) end)
+    if not ok or type(source) ~= "string" or #source < 20 then
+        error("Spectra module download failed [" .. path .. "]: " .. tostring(source))
+    end
+    local chunk, compileError = loadstring(source, "@Spectra/" .. path)
+    if not chunk then error("Spectra module compile failed [" .. path .. "]: " .. tostring(compileError)) end
+    local exported = chunk()
+    moduleCache[path] = exported
+    return exported
+end
 local BRAND_NAME = type(startup.Name) == "string" and string.sub(startup.Name, 1, 24) or "spectra"
 local creatorInputAdapter
 local theme = {
@@ -63,6 +78,12 @@ local defaults = {
     FireInterval = 120, FireMethod = "VirtualUser", AimWallCheck = true,
     AntiAim = false, AntiMode = "Jitter", AntiYaw = 180,
     AntiJitter = 55, AntiSpeed = 180, AntiPeriod = 120,
+    AimRayOrigin = "Camera", VisibilitySampling = "Dense",
+    AliveHealthCheck = true, AliveStateCheck = true, AliveAncestryCheck = true,
+    AliveRootCheck = true, AliveDeadTags = true,
+    ThirdPerson = false, ThirdPersonDistance = 8, ThirdPersonShoulder = 0,
+    BulletTracers = true, HitLogs = true, HitMarker = true, HitFlash = true,
+    HitLogDuration = 2.5, TracerDuration = 0.35,
     HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
 local settingRanges = {
@@ -71,11 +92,14 @@ local settingRanges = {
     AimFOV={5,360}, AimDistance={50,3000}, AimSmooth={2,40}, TargetStickiness={0,50},
     AcquireMS={0,100}, ShotMS={0,100}, HoldMS={10,100}, FireInterval={60,1000},
     AntiYaw={-180,180}, AntiJitter={0,120}, AntiSpeed={30,720}, AntiPeriod={50,500},
+    ThirdPersonDistance={2,24}, ThirdPersonShoulder={-4,4},
+    HitLogDuration={0.5,8}, TracerDuration={0.08,1.5},
 }
 local settingChoices = {
     BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
     AimPart={"Голова","Корпус","Видимая"}, TargetPriority={"Прицел","Ближайший","Мало HP"},
     FireMethod={"VirtualUser","MouseButton","Creator"}, AntiMode={"Назад","Jitter","Spin"},
+    AimRayOrigin={"Camera","Head","Both"}, VisibilitySampling={"Fast","Balanced","Dense"},
 }
 local function normalizeSetting(key,value)
     if defaults[key] == nil or type(value) ~= type(defaults[key]) then return nil,"Unknown setting or wrong type" end
@@ -110,17 +134,18 @@ local metadataDue, statsDue = 0, 0
 local profileName = "Tactical"
 local cleanup
 local deadCharacters = setmetatable({}, {__mode = "k"})
+local Alive = importModule("core/alive.lua")({
+    Players = Players,
+    Settings = settings,
+    DeadCharacters = deadCharacters,
+})
+local Visibility = importModule("core/visibility.lua")({
+    Settings = settings,
+    Workspace = workspace,
+})
 
--- A single live predicate is shared by ESP, target selection and shot validation.
 local function liveCharacter(player, expected)
-    local character = player and player.Character
-    if not character or (expected and character ~= expected) or deadCharacters[character]
-        or player.Parent ~= Players or not character:IsDescendantOf(workspace) then return nil end
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead then
-        return nil
-    end
-    return character, humanoid
+    return Alive:IsAlive(player, expected)
 end
 
 local function connect(signal, callback)
@@ -491,7 +516,9 @@ section("RAGE","Aimbot",1)
 toggle("RAGE","Enabled","SilentAim","Silent: поворот камеры → нажатие → отпускание → возврат")
 toggle("RAGE","Automatic fire","AutoFire","Только по живой видимой цели")
 toggle("RAGE","Check team","AimTeamCheck")
-toggle("RAGE","Visibility check","AimWallCheck","Проверка препятствий от камеры и головы")
+toggle("RAGE","Visibility check","AimWallCheck","Multipoint raycast по реально видимым частям")
+choices("RAGE","Ray origin","AimRayOrigin",{"Camera","Head","Both"})
+choices("RAGE","Multipoint sampling","VisibilitySampling",{"Fast","Balanced","Dense"})
 choices("RAGE","Target selection","TargetPriority",{"Прицел","Ближайший","Мало HP"})
 choices("RAGE","Target hitbox","AimPart",{"Голова","Корпус","Видимая"})
 slider("RAGE","Maximum FOV","AimFOV",5,360,5,"°")
@@ -574,10 +601,20 @@ do
 end
 section("EFFECTS","Indicators",2)
 toggle("EFFECTS","Head marker","HeadMarker")
+toggle("EFFECTS","Bullet tracers","BulletTracers")
+toggle("EFFECTS","Hit marker","HitMarker")
+toggle("EFFECTS","Hit logs","HitLogs")
+toggle("EFFECTS","Hit flash shader","HitFlash")
+slider("EFFECTS","Tracer lifetime","TracerDuration",0.08,1.5,0.01," s")
+slider("EFFECTS","Hitlog lifetime","HitLogDuration",0.5,8,0.25," s")
 toggle("EFFECTS","Target focus","TargetFocus")
 toggle("EFFECTS","Death particles","DeathShatter")
 
-section("MISC","Radar",1)
+section("MISC","Camera",1)
+toggle("MISC","Third person","ThirdPerson")
+slider("MISC","Third person distance","ThirdPersonDistance",2,24,1," st")
+slider("MISC","Shoulder offset","ThirdPersonShoulder",-4,4,0.5," st")
+section("MISC","Radar",2)
 toggle("MISC","Enabled","Radar")
 slider("MISC","Radar range","RadarRange",50,1000,25," st")
 section("MISC","Interface",2)
@@ -590,13 +627,23 @@ end
 local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,AimDistance=true,
     AimPart=true,HeadMarker=true,TargetFocus=true,DeathShatter=true,AimEnabled=true,AimSmooth=true,
     TargetPriority=true,TargetStickiness=true,AcquireMS=true,ShotMS=true,HoldMS=true,FireInterval=true,
-    FireMethod=true,AimWallCheck=true,AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true}
+    FireMethod=true,AimWallCheck=true,AimRayOrigin=true,VisibilitySampling=true,
+    AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true,
+    AliveHealthCheck=true,AliveStateCheck=true,AliveAncestryCheck=true,AliveRootCheck=true,AliveDeadTags=true,
+    ThirdPerson=true,ThirdPersonDistance=true,ThirdPersonShoulder=true,
+    BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true}
 local profiles={
     {Name="Clean",Values={Boxes=false,Distance=false,Radar=false,Arrows=false,VisibilityColors=false,Tool=false,HighlightStyle="Контур",Glow=false}},
     {Name="Tactical",Values={}},
     {Name="Detailed",Values={Skeleton=true,Tracers=true,LookDirection=true,Velocity=true,HighlightStyle="Пульс"}},
 }
-section("CONFIG","Visual presets",1)
+section("CONFIG","Alive checks",1)
+toggle("CONFIG","Health > 0","AliveHealthCheck")
+toggle("CONFIG","Humanoid state","AliveStateCheck")
+toggle("CONFIG","Workspace ancestry","AliveAncestryCheck")
+toggle("CONFIG","Head + root exist","AliveRootCheck")
+toggle("CONFIG","Dead/Alive attributes","AliveDeadTags")
+section("CONFIG","Visual presets",2)
 for _,profile in ipairs(profiles) do
     local preset=profile
     local item=row("CONFIG",29)

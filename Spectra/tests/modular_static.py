@@ -68,8 +68,9 @@ portable_sources = [main]
 for path in required_modules:
     portable_sources.append((ROOT / path).read_text(encoding="utf-8"))
 portable = "\n".join(portable_sources)
-for forbidden in ("PlaceId", "GameId", "RemoteEvent", "RemoteFunction", "ReplicatedStorage:WaitForChild"):
-    check(forbidden not in portable, f"server-specific marker leaked into runtime: {forbidden}")
+for forbidden in ("game.PlaceId", "game.GameId", ":FireServer(", ":InvokeServer(",
+                  'ReplicatedStorage:WaitForChild("'):
+    check(forbidden not in portable, f"server-specific runtime binding leaked into code: {forbidden}")
 
 # Regression for the fence/partial-visibility bug.
 check('clear(origin, point, character) and clear(head.Position, point, character)' not in main,

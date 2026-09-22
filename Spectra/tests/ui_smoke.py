@@ -8,7 +8,7 @@ import tempfile
 root=Path(__file__).resolve().parents[1]
 source=(root/'main.lua').read_text()
 prefix=source[:source.index('-- Radar lies outside')]
-api_source=source[source.index('local api = {Version="8.0.0"}'):]
+api_source=source[source.index('local api = {Version="10.0.0"}'):]
 api_setup='''
 local pauses=0
 local combat={Target='target',Status='ready',Pause=function() pauses=pauses+1 end}

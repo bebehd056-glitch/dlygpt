@@ -37,6 +37,32 @@ _G.SpectraOptions = {
 }
 ```
 
+## Локальная поставка через ModuleScript
+
+Для продажи/встраивания в чужой плейс не обязательно использовать GitHub или `loadstring`.
+
+`main.lua` принимает `SpectraOptions.ModuleResolver`. Функция получает относительный путь модуля и должна вернуть результат `require`.
+
+Пример схемы:
+
+```lua
+local root = game:GetService("ReplicatedStorage"):WaitForChild("Spectra")
+
+_G.SpectraOptions = {
+    ModuleResolver = function(path)
+        local node = root
+        for part in string.gmatch(path:gsub("%.lua$", ""), "[^/]+") do
+            node = node:WaitForChild(part)
+        end
+        return require(node)
+    end,
+}
+
+local spectra = require(root:WaitForChild("main"))
+```
+
+Так можно распространять весь пакет как набор обычных ModuleScript. Remote loader остаётся только удобным development-вариантом.
+
 ## Aim
 
 Есть два независимых режима.

@@ -6,8 +6,9 @@ return function(ctx)
     local settings = assert(ctx.Settings, "Alive: Settings missing")
     local deadCharacters = assert(ctx.DeadCharacters, "Alive: DeadCharacters missing")
 
-    local deadAttributes = {"Dead", "IsDead", "Eliminated", "Killed", "Death"}
+    local deadAttributes = {"Dead", "IsDead", "Eliminated", "Killed", "Death", "Died"}
     local aliveAttributes = {"Alive", "IsAlive"}
+    local deadStates = {dead=true, died=true, killed=true, eliminated=true, spectating=true}
 
     local function hasDeadTag(character, humanoid)
         if settings.AliveDeadTags == false then return false end
@@ -25,6 +26,13 @@ return function(ctx)
             end
             local value = character:FindFirstChild(name) or humanoid:FindFirstChild(name)
             if value and value:IsA("BoolValue") and value.Value == false then return true end
+        end
+
+        for _, name in ipairs({"State", "Status", "LifeState"}) do
+            local attr = character:GetAttribute(name)
+            if type(attr) == "string" and deadStates[string.lower(attr)] then return true end
+            local value = character:FindFirstChild(name)
+            if value and value:IsA("StringValue") and deadStates[string.lower(value.Value)] then return true end
         end
         return false
     end

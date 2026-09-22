@@ -1,8 +1,8 @@
 --[[
 SPECTRA v10 — portable SDK / motion aim / world shader stack.
-Insert / RightShift: menu. End: unload. Regular aim: hold RMB.
-Client-only. Weapon activation depends on the weapon's input implementation.
-Silent keeps the camera aimed until input release, then restores the view.
+Insert / RightShift: menu. End: unload. Motion aim: Hold RMB or Always.
+Client-only. Weapon activation depends on the selected local input adapter.
+Silent flicks only around the input call and restores the camera in the same render step.
 Death is latched per Character; only a new Character resets the latch.
 ]]
 

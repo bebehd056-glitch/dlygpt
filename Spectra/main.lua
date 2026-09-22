@@ -1436,25 +1436,45 @@ local function startCombat()
         if blocked() or not settings.SilentAim or camera ~= shot.Camera or now > shot.Expires
             or (shot.Auto and not settings.AutoFire) or not enemyAlive(shot.Player, shot.Character)
             or not shot.Part:IsDescendantOf(shot.Character) then
-            restoreShot(camera, "Выстрел отменён") return
+            restoreShot(camera, "Выстрел отменён")
+            return
         end
-        -- Base is the camera controller's fresh view, never last frame's flick.
-        shot.Base = camera.CFrame
+
         updateFilter(camera)
         local point = validPoint(camera, shot.Part, shot.Character, shot.Auto)
-        if not point then restoreShot(camera, "Цель скрылась / вне FOV") return end
-        camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+        if not point then
+            restoreShot(camera, "Цель скрылась / вне FOV")
+            return
+        end
         shot.Point = point
-        shot.Applied = true
+
         if shot.Phase == "Aim" and now >= shot.FireAt then
+            -- Flick exists only around the input call and is restored in the same render step.
+            -- This removes the visible tug-of-war with Roblox's camera controller.
+            shot.Base = camera.CFrame
+            camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+            shot.Applied = true
+
+            telemetry:RecordShot(shot.Player, shot.Character, shot.Part, shot.Base.Position, point)
             local activeShot = shot
             local fired, reason = pressInput(camera)
-            -- Tool callbacks can synchronously kill a target and cancel this shot.
-            if shot ~= activeShot then releaseInput() return end
+
+            if camera == workspace.CurrentCamera then
+                camera.CFrame = shot and shot.Base or camera.CFrame
+            end
+            if shot then shot.Applied = false end
+
+            -- Tool callbacks may synchronously kill the target and cancel the shot.
+            if shot ~= activeShot then
+                releaseInput()
+                return
+            end
             if not fired then
                 autoFireDue = now + 0.5
-                restoreShot(camera, reason) return
+                restoreShot(camera, reason)
+                return
             end
+
             shot.Phase = "Hold"
             shot.ReleaseAt = now + settings.HoldMS / 1000
             autoFireDue = now + settings.FireInterval / 1000
@@ -1829,6 +1849,8 @@ cleanup = function()
     alive = false
     closeDropdown()
     combat:Stop()
+    thirdPerson:Stop()
+    telemetry:Stop()
     RunService:UnbindFromRenderStep(RENDER_NAME)
     for _, connection in ipairs(connections) do connection:Disconnect() end
     for _, motion in pairs(activeTweens) do motion:Cancel() end
@@ -1864,7 +1886,9 @@ local function render(dt)
     end
     if (camera.ViewportSize - lastViewport).Magnitude > 0.5 then updateLayout(camera.ViewportSize) end
     local now = os.clock()
+    thirdPerson:Update()
     combat:Update(dt, camera, now)
+    telemetry:Update(camera, now)
     local localCharacter = localPlayer.Character
     local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
     local origin = localRoot and localRoot.Position or camera.CFrame.Position

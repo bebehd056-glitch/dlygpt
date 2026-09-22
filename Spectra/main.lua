@@ -1,6 +1,6 @@
 --[[
-SPECTRA v7 — camera silent / regular aim / character anti-aim.
-RightShift: menu. End: unload. Regular aim: hold RMB.
+SPECTRA v8 — classic menu / portable client aim / input adapters.
+Insert / RightShift: menu. End: unload. Regular aim: hold RMB.
 Client-only. Weapon activation depends on the weapon's input implementation.
 Silent keeps the camera aimed until input release, then restores the view.
 Death is latched per Character; only a new Character resets the latch.
@@ -28,15 +28,18 @@ if oldGui then
     oldGui:Destroy()
 end
 
+local startup = type(_G.SpectraOptions) == "table" and _G.SpectraOptions or {}
+local BRAND_NAME = type(startup.Name) == "string" and string.sub(startup.Name, 1, 24) or "spectra"
+local creatorInputAdapter
 local theme = {
-    Background = Color3.fromRGB(18, 20, 23),
-    Sidebar = Color3.fromRGB(22, 24, 28),
-    Hover = Color3.fromRGB(31, 35, 40),
-    Line = Color3.fromRGB(43, 47, 53),
-    Text = Color3.fromRGB(231, 234, 238),
-    Muted = Color3.fromRGB(139, 147, 158),
-    Accent = Color3.fromRGB(163, 195, 181),
-    Off = Color3.fromRGB(56, 61, 70),
+    Background = Color3.fromRGB(19, 19, 19),
+    Sidebar = Color3.fromRGB(28, 28, 28),
+    Hover = Color3.fromRGB(39, 39, 39),
+    Line = Color3.fromRGB(48, 48, 48),
+    Text = Color3.fromRGB(218, 218, 218),
+    Muted = Color3.fromRGB(115, 115, 115),
+    Accent = Color3.fromRGB(164, 198, 48),
+    Off = Color3.fromRGB(62, 62, 62),
     Visible = Color3.fromRGB(142, 214, 174),
     Hidden = Color3.fromRGB(231, 143, 119),
 }
@@ -62,13 +65,49 @@ local defaults = {
     AntiJitter = 55, AntiSpeed = 180, AntiPeriod = 120,
     HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
+local settingRanges = {
+    MaxDistance={100,3000}, FillOpacity={0,100}, OutlineOpacity={0,100}, Thickness={1,3},
+    PulseSpeed={0.4,2.4}, ColorIndex={1,4}, RadarRange={50,1000}, LookLength={3,24},
+    AimFOV={5,360}, AimDistance={50,3000}, AimSmooth={2,40}, TargetStickiness={0,50},
+    AcquireMS={0,100}, ShotMS={0,100}, HoldMS={10,100}, FireInterval={60,1000},
+    AntiYaw={-180,180}, AntiJitter={0,120}, AntiSpeed={30,720}, AntiPeriod={50,500},
+}
+local settingChoices = {
+    BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
+    AimPart={"Голова","Корпус","Видимая"}, TargetPriority={"Прицел","Ближайший","Мало HP"},
+    FireMethod={"VirtualUser","MouseButton","Creator"}, AntiMode={"Назад","Jitter","Spin"},
+}
+local function normalizeSetting(key,value)
+    if defaults[key] == nil or type(value) ~= type(defaults[key]) then return nil,"Unknown setting or wrong type" end
+    if type(value) == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then return nil,"Number must be finite" end
+        local range = settingRanges[key]
+        if range then value = math.clamp(value,range[1],range[2]) end
+        if key == "ColorIndex" then value = math.floor(value+0.5) end
+    elseif type(value) == "string" then
+        local found = false
+        for _,option in ipairs(settingChoices[key] or {}) do if value == option then found=true break end end
+        if not found then return nil,"Unknown choice" end
+    end
+    return value
+end
 local settings = {}
-for key, value in pairs(defaults) do settings[key] = value end
+for key,value in pairs(defaults) do settings[key]=value end
+if type(startup.Settings) == "table" then
+    for key,value in pairs(startup.Settings) do
+        local normalized = normalizeSetting(key,value)
+        if normalized ~= nil then settings[key]=normalized end
+    end
+end
+if type(startup.InputAdapter) == "table" and type(startup.InputAdapter.Press) == "function"
+    and type(startup.InputAdapter.Release) == "function" then
+    creatorInputAdapter = {Press=startup.InputAdapter.Press,Release=startup.InputAdapter.Release}
+end
 local alive, menuOpen = true, true
 local connections, visuals, refreshers = {}, {}, {}
 local activeTweens = setmetatable({}, {__mode = "k"})
 local metadataDue, statsDue = 0, 0
-local profileName = "Тактический"
+local profileName = "Tactical"
 local cleanup
 local deadCharacters = setmetatable({}, {__mode = "k"})
 
@@ -100,7 +139,7 @@ local function corner(parent, radius)
 end
 local function stroke(parent, color, transparency)
     return new("UIStroke", {Color = color or theme.Line, Thickness = 1,
-        Transparency = transparency or 0}, parent)
+        Transparency = transparency or 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, parent)
 end
 local function tween(item, properties, duration)
     if activeTweens[item] then activeTweens[item]:Cancel() end
@@ -113,7 +152,7 @@ local function label(parent, text, x, y, width, height, size, color, font)
     return new("TextLabel", {
         BackgroundTransparency = 1, BorderSizePixel = 0,
         Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, height),
-        Text = text, Font = font or Enum.Font.Gotham, TextSize = size or 12,
+        Text = text, Font = font or Enum.Font.Arial, TextSize = size or 12,
         TextColor3 = color or theme.Text, TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
     }, parent)
@@ -122,18 +161,21 @@ local function button(parent, text, x, y, width, height)
     return new("TextButton", {
         Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, height),
         BackgroundColor3 = theme.Sidebar, BorderSizePixel = 0, AutoButtonColor = false,
-        Text = text, TextSize = 12, Font = Enum.Font.GothamMedium, TextColor3 = theme.Text,
+        Text = text, TextSize = 11, Font = Enum.Font.Arial, TextColor3 = theme.Text,
     }, parent)
 end
 local function refreshUI()
     for _, refresh in ipairs(refreshers) do refresh() end
 end
 local function setSetting(key, value)
-    if settings[key] == value then return end
-    settings[key] = value
-    profileName = "Свои настройки"
+    local normalized, reason = normalizeSetting(key,value)
+    if normalized == nil then return false,reason end
+    if settings[key] == normalized then return true end
+    settings[key] = normalized
+    profileName = "Custom"
     metadataDue = 0
     refreshUI()
+    return true
 end
 
 local gui = new("ScreenGui", {
@@ -178,293 +220,414 @@ local function drawLine(line, a, b, color, thickness, glow)
     end
 end
 
--- Menu: restrained typography, four tabs, flat rows, no external assets.
-local MENU_W, MENU_H = 562, 516
+-- Classic gamesense-inspired geometry; all controls/icons are drawn locally.
+local MENU_W, MENU_H = 700, 590
 local menu = new("CanvasGroup", {Name = "Menu", Size = UDim2.fromOffset(MENU_W, MENU_H),
-    Position = UDim2.fromOffset(28, 100), BackgroundColor3 = theme.Background,
-    BorderSizePixel = 0, GroupTransparency = 0, ZIndex = 20}, gui)
-corner(menu, 9)
-stroke(menu)
+    Position = UDim2.fromOffset(28, 100), BackgroundColor3 = Color3.fromRGB(10, 10, 10),
+    BorderSizePixel = 1, BorderColor3 = Color3.new(0, 0, 0), GroupTransparency = 0, ZIndex = 20}, gui)
 local menuScale = new("UIScale", {Scale = 1}, menu)
-local header = new("Frame", {BackgroundTransparency = 1, Active = true,
-    Size = UDim2.new(1, -46, 0, 68)}, menu)
-for i = 1, 3 do
-    new("Frame", {Position = UDim2.fromOffset(20 + (i - 1) * 5, 24 + (3 - i) * 3),
-        Size = UDim2.fromOffset(2, 12 + (i - 1) * 3), BackgroundColor3 = theme.Accent,
-        BorderSizePixel = 0}, header)
+local function flatFrame(parent, x, y, w, h, color)
+    return new("Frame", {Position=UDim2.fromOffset(x,y), Size=UDim2.fromOffset(w,h),
+        BackgroundColor3=color, BorderSizePixel=0}, parent)
 end
-label(header, "SPECTRA", 45, 17, 175, 23, 17, theme.Text, Enum.Font.GothamMedium)
-label(header, "PLAYER VISUALS  /  03", 45, 39, 180, 14, 9, theme.Muted)
-local master = button(header, "", 384, 22, 103, 26)
-corner(master, 4)
-master.Modal = true
+local outer = flatFrame(menu, 1, 1, MENU_W-2, MENU_H-2, Color3.fromRGB(54,54,54))
+local inner = flatFrame(outer, 1, 1, MENU_W-4, MENU_H-4, Color3.fromRGB(20,20,20))
+local surface = flatFrame(inner, 4, 4, MENU_W-12, MENU_H-12, theme.Background)
+stroke(surface, Color3.fromRGB(55,55,55))
+local spectrum = flatFrame(menu, 7, 7, MENU_W-14, 2, Color3.new(1,1,1))
+new("UIGradient", {Color=ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(64,185,225)),
+    ColorSequenceKeypoint.new(0.28,Color3.fromRGB(139,110,207)),
+    ColorSequenceKeypoint.new(0.52,Color3.fromRGB(221,89,147)),
+    ColorSequenceKeypoint.new(0.76,Color3.fromRGB(225,163,86)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(176,204,85)),
+})}, spectrum)
+-- A sparse woven texture without downloading images or creating thousands of cells.
+for y=39,MENU_H-29,6 do
+    local line=flatFrame(menu,82,y,MENU_W-91,1,Color3.fromRGB(30,30,30))
+    line.BackgroundTransparency=0.58
+end
+local header = new("Frame", {Name="DragHandle", BackgroundTransparency=1, Active=true,
+    Position=UDim2.fromOffset(9,10), Size=UDim2.fromOffset(MENU_W-44,25)}, menu)
+local brand = label(header, BRAND_NAME, 9, 1, 210, 22, 13, theme.Text, Enum.Font.ArialBold)
+label(header, "[ classic / v8 ]", 214, 3, 130, 18, 10, theme.Muted)
+local master = button(header, "", MENU_W-164, 3, 104, 18)
+master.BackgroundTransparency=1
+master.Modal=true
 local function updateMaster()
-    master.Text = settings.Enabled and "ESP  ·  ВКЛ" or "ESP  ·  ВЫКЛ"
-    master.TextColor3 = settings.Enabled and theme.Accent or theme.Muted
+    master.Text=settings.Enabled and "ESP  [ ON ]" or "ESP  [ OFF ]"
+    master.TextColor3=settings.Enabled and theme.Accent or theme.Muted
 end
-refreshers[#refreshers + 1] = updateMaster
-connect(master.Activated, function() setSetting("Enabled", not settings.Enabled) end)
-local closeButton = button(menu, "−", MENU_W - 48, 20, 30, 30)
-closeButton.BackgroundTransparency = 1
-closeButton.TextSize = 23
-new("Frame", {Position = UDim2.fromOffset(16, 67), Size = UDim2.new(1, -32, 0, 1),
-    BackgroundColor3 = theme.Line, BorderSizePixel = 0}, menu)
-local sidebar = new("Frame", {Position = UDim2.fromOffset(0, 68),
-    Size = UDim2.new(0, 124, 1, -102), BackgroundColor3 = theme.Sidebar, BorderSizePixel = 0}, menu)
-local footer = label(menu, "", 17, MENU_H - 28, MENU_W - 34, 18, 10, theme.Muted)
-local pages, tabs = {}, {}
-local tabNames = {"ESP", "Эффекты", "Навигация", "Бой", "Профили"}
-local activePage = "ESP"
-local contentW = MENU_W - 156
+refreshers[#refreshers+1]=updateMaster
+connect(master.Activated,function() setSetting("Enabled",not settings.Enabled) end)
+local closeButton=button(menu,"×",MENU_W-33,12,20,19)
+closeButton.BackgroundTransparency=1
+closeButton.TextSize=16
+local sidebar=flatFrame(menu,8,36,66,MENU_H-61,Color3.fromRGB(12,12,12))
+flatFrame(menu,74,36,1,MENU_H-61,theme.Line)
+local footer=label(menu,"",15,MENU_H-23,MENU_W-30,16,10,theme.Muted)
+local footerHint
+local function hintOn(item,text)
+    if not text then return end
+    connect(item.MouseEnter,function() footerHint=text end)
+    connect(item.MouseLeave,function() if footerHint==text then footerHint=nil end end)
+end
+local pages,tabs,tabIcons={}, {}, {}
+local activePage="RAGE"
+local contentW=278
+local columns,currentGroups={},{}
+local dropdownClose
+local function closeDropdown()
+    if dropdownClose then local close=dropdownClose; dropdownClose=nil; close() end
+end
+local function icon(parent,kind)
+    local segments={}
+    local function segment(x,y,w,h,rotation)
+        local part=flatFrame(parent,x,y,w,h,theme.Muted)
+        part.Rotation=rotation or 0
+        segments[#segments+1]=part
+    end
+    if kind==1 then -- crosshair
+        segment(30,13,2,12); segment(30,35,2,12); segment(13,29,12,2); segment(37,29,12,2)
+        local ring=flatFrame(parent,22,21,18,18,theme.Muted)
+        ring.BackgroundTransparency=1
+        corner(ring,9)
+        segments[#segments+1]=stroke(ring,theme.Muted)
+    elseif kind==2 then -- cursor
+        segment(23,15,2,29); segment(23,15,24,2,44); segment(24,35,16,2,-25); segment(35,35,2,14,-28)
+    elseif kind==3 then -- opposing arrows
+        segment(16,22,29,2); segment(15,19,11,2,-40); segment(15,25,11,2,40)
+        segment(17,37,29,2); segment(37,34,11,2,40); segment(37,40,11,2,-40)
+    elseif kind==4 then -- body
+        local head=flatFrame(parent,26,13,10,10,theme.Muted); corner(head,5); segments[#segments+1]=head
+        segment(25,26,12,16); segment(17,27,5,17,15); segment(40,27,5,17,-15)
+        segment(25,43,5,12,6); segment(32,43,5,12,-6)
+    elseif kind==5 then -- sun
+        for i=0,7 do
+            local a=i*math.pi/4
+            segment(30+math.cos(a)*18,29+math.sin(a)*18,8,2,math.deg(a))
+        end
+        local sun=flatFrame(parent,25,24,12,12,theme.Muted); corner(sun,6); segments[#segments+1]=sun
+    elseif kind==6 then -- sliders
+        for i=0,2 do
+            segment(16,20+i*12,31,2); segment(23+(i%2)*12,16+i*12,5,10)
+        end
+    else -- file
+        segment(20,14,2,36); segment(20,14,24,2); segment(43,14,2,36); segment(20,49,25,2)
+        segment(26,24,12,2); segment(26,31,12,2); segment(26,38,9,2)
+    end
+    return segments
+end
 local function showPage(name)
-    activePage = name
-    for tabName, page in pairs(pages) do
-        page.Visible = tabName == name
-        tabs[tabName].TextColor3 = tabName == name and theme.Text or theme.Muted
-        tabs[tabName].BackgroundTransparency = tabName == name and 0 or 1
+    closeDropdown()
+    activePage=name
+    footerHint=nil
+    for key,page in pairs(pages) do
+        local selected=key==name
+        page.Visible=selected
+        tabs[key].BackgroundColor3=selected and theme.Background or Color3.fromRGB(12,12,12)
+        tabs[key].TextColor3=selected and theme.Text or theme.Muted
+        for _,part in ipairs(tabIcons[key]) do
+            if part:IsA("UIStroke") then part.Color=selected and theme.Text or theme.Muted
+            else part.BackgroundColor3=selected and theme.Text or theme.Muted end
+        end
     end
 end
-for index, name in ipairs(tabNames) do
-    local tabName = name
-    local tab = button(sidebar, string.format("%02d  %s", index, name), 10, 16 + (index - 1) * 40, 104, 32)
-    tab.TextSize = 11
-    tab.BackgroundColor3 = theme.Hover
-    corner(tab, 4)
-    tabs[name] = tab
-    local page = new("ScrollingFrame", {Name = name, Position = UDim2.fromOffset(140, 81),
-        Size = UDim2.fromOffset(contentW, MENU_H - 129), BackgroundTransparency = 1,
-        BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = theme.Off,
-        CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollingDirection = Enum.ScrollingDirection.Y, Visible = false}, menu)
-    new("UIListLayout", {Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder}, page)
-    new("UIPadding", {PaddingBottom = UDim.new(0, 8), PaddingRight = UDim.new(0, 7)}, page)
-    pages[name] = page
-    connect(tab.Activated, function() showPage(tabName) end)
-end
-label(sidebar, "LOCAL\nR6 / R15", 21, 343, 89, 40, 10, theme.Muted)
-
-local order = 0
-local function row(pageName, height)
-    order = order + 1
-    return new("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, height),
-        LayoutOrder = order}, pages[pageName])
-end
-local function divider(parent, height)
-    new("Frame", {Position = UDim2.new(0, 0, 0, height - 1), Size = UDim2.new(1, -2, 0, 1),
-        BackgroundColor3 = theme.Line, BackgroundTransparency = 0.45, BorderSizePixel = 0}, parent)
-end
-local function section(pageName, titleText, description)
-    local item = row(pageName, description and 57 or 34)
-    label(item, titleText, 0, 5, contentW - 12, 21, 14, theme.Text, Enum.Font.GothamMedium)
-    if description then label(item, description, 0, 28, contentW - 12, 18, 10, theme.Muted) end
-end
-local function toggle(pageName, titleText, key, hint)
-    local item = row(pageName, hint and 52 or 41)
-    local hit = button(item, "", 0, 0, contentW - 8, hint and 51 or 40)
-    hit.BackgroundTransparency = 1
-    label(hit, titleText, 0, hint and 7 or 10, contentW - 69, 19, 12)
-    if hint then label(hit, hint, 0, 27, contentW - 65, 16, 10, theme.Muted) end
-    local pill = new("Frame", {AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -4, 0.5, 0), Size = UDim2.fromOffset(30, 16),
-        BorderSizePixel = 0, BackgroundColor3 = theme.Off}, hit)
-    corner(pill, 8)
-    local dot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5),
-        Size = UDim2.fromOffset(10, 10), BackgroundColor3 = theme.Text, BorderSizePixel = 0}, pill)
-    corner(dot, 5)
-    local function refresh()
-        tween(pill, {BackgroundColor3 = settings[key] and theme.Accent or theme.Off})
-        tween(dot, {Position = UDim2.new(settings[key] and 1 or 0, settings[key] and -8 or 8, 0.5, 0)})
+for index,name in ipairs({"RAGE","LEGIT","ANTI-AIM","VISUALS","EFFECTS","MISC","CONFIG"}) do
+    local key=name
+    local tab=button(sidebar,"",0,(index-1)*71,66,71)
+    tab.Name=name
+    tabs[name]=tab
+    tabIcons[name]=icon(tab,index)
+    local caption=label(tab,name,0,55,66,12,8,theme.Muted)
+    caption.TextXAlignment=Enum.TextXAlignment.Center
+    flatFrame(tab,0,70,66,1,theme.Line)
+    hintOn(tab,name)
+    local page=new("Frame",{Name=name,Position=UDim2.fromOffset(91,42),
+        Size=UDim2.fromOffset(588,MENU_H-75),BackgroundTransparency=1,Visible=false},menu)
+    pages[name]=page
+    columns[name]={}
+    for col=1,2 do
+        local column=new("ScrollingFrame",{Name="Column"..col,Position=UDim2.fromOffset((col-1)*297,0),
+            Size=UDim2.fromOffset(288,MENU_H-77),BackgroundTransparency=1,BorderSizePixel=0,
+            ScrollBarThickness=2,ScrollBarImageColor3=theme.Off,CanvasSize=UDim2.fromOffset(0,0),
+            AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollingDirection=Enum.ScrollingDirection.Y},page)
+        new("UIListLayout",{Padding=UDim.new(0,16),SortOrder=Enum.SortOrder.LayoutOrder},column)
+        new("UIPadding",{PaddingTop=UDim.new(0,8),PaddingLeft=UDim.new(0,2),
+            PaddingBottom=UDim.new(0,8),PaddingRight=UDim.new(0,6)},column)
+        columns[name][col]=column
+        connect(column:GetPropertyChangedSignal("CanvasPosition"),closeDropdown)
     end
-    refreshers[#refreshers + 1] = refresh
-    connect(hit.Activated, function() setSetting(key, not settings[key]) end)
-    connect(hit.MouseEnter, function() tween(hit, {BackgroundTransparency = 0.45}) end)
-    connect(hit.MouseLeave, function() tween(hit, {BackgroundTransparency = 1}) end)
-    divider(item, hint and 52 or 41)
+    connect(tab.Activated,function() showPage(key) end)
+end
+local order=0
+local function section(pageName,titleText,column)
+    order=order+1
+    local group=new("Frame",{Name=titleText,BackgroundColor3=Color3.fromRGB(23,23,23),
+        BorderSizePixel=1,BorderColor3=Color3.new(0,0,0),Size=UDim2.fromOffset(contentW,28),
+        AutomaticSize=Enum.AutomaticSize.Y,LayoutOrder=order},columns[pageName][column or 1])
+    stroke(group,Color3.fromRGB(49,49,49))
+    local title=label(group,titleText,10,-8,contentW-20,16,11,theme.Text,Enum.Font.ArialBold)
+    title.AutomaticSize=Enum.AutomaticSize.X
+    title.Size=UDim2.fromOffset(0,16)
+    title.BackgroundTransparency=0
+    title.BackgroundColor3=Color3.fromRGB(23,23,23)
+    title.ZIndex=3
+    local body=new("Frame",{Name="Body",Position=UDim2.fromOffset(12,16),
+        Size=UDim2.fromOffset(contentW-24,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1},group)
+    new("UIListLayout",{Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder},body)
+    new("UIPadding",{PaddingBottom=UDim.new(0,12)},body)
+    currentGroups[pageName]=body
+    return group
+end
+local function row(pageName,height)
+    order=order+1
+    return new("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,height),LayoutOrder=order},currentGroups[pageName])
+end
+local function shade(parent,top,bottom)
+    new("UIGradient",{Rotation=90,Color=ColorSequence.new(top,bottom)},parent)
+end
+local function toggle(pageName,titleText,key,hint)
+    local item=row(pageName,21)
+    local hit=button(item,"",0,0,contentW-24,21)
+    hit.BackgroundTransparency=1
+    local box=flatFrame(hit,1,5,10,10,Color3.fromRGB(58,58,58))
+    box.BorderSizePixel=1
+    box.BorderColor3=Color3.new(0,0,0)
+    shade(box,Color3.new(1,1,1),Color3.fromRGB(145,145,145))
+    local textLabel=label(hit,titleText,20,1,contentW-48,18,11)
+    refreshers[#refreshers+1]=function()
+        box.BackgroundColor3=settings[key] and theme.Accent or Color3.fromRGB(62,62,62)
+        textLabel.TextColor3=settings[key] and theme.Text or Color3.fromRGB(184,184,184)
+    end
+    hintOn(hit,hint)
+    connect(hit.Activated,function() setSetting(key,not settings[key]) end)
 end
 local sliderDrag
-local function slider(pageName, titleText, key, minimum, maximum, step, unit)
-    local item = row(pageName, 70)
-    label(item, titleText, 0, 8, contentW - 114, 18, 12)
-    local valueLabel = label(item, "", contentW - 112, 8, 96, 18, 11, theme.Muted, Enum.Font.Code)
-    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
-    local trackHit = button(item, "", 3, 34, contentW - 24, 24)
-    trackHit.BackgroundTransparency = 1
-    local track = new("Frame", {Position = UDim2.new(0, 0, 0.5, -1),
-        Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = theme.Off, BorderSizePixel = 0}, trackHit)
-    local fill = new("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = theme.Accent, BorderSizePixel = 0}, track)
-    local dot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(8, 8),
-        BackgroundColor3 = theme.Text, BorderSizePixel = 0}, trackHit)
-    corner(dot, 4)
+local function slider(pageName,titleText,key,minimum,maximum,step,unit)
+    local item=row(pageName,37)
+    label(item,titleText,20,0,contentW-44,16,11)
+    local hit=button(item,"",21,16,contentW-58,19)
+    hit.BackgroundTransparency=1
+    local track=flatFrame(hit,0,4,contentW-58,7,Color3.fromRGB(45,45,45))
+    track.BorderSizePixel=1; track.BorderColor3=Color3.new(0,0,0)
+    local fill=flatFrame(track,0,0,0,7,theme.Accent)
+    shade(fill,Color3.new(1,1,1),Color3.fromRGB(132,132,132))
+    local valueLabel=label(hit,"",0,1,contentW-58,14,10,theme.Text,Enum.Font.ArialBold)
+    valueLabel.TextXAlignment=Enum.TextXAlignment.Center
+    valueLabel.TextStrokeTransparency=0
+    valueLabel.TextStrokeColor3=Color3.new(0,0,0)
+    valueLabel.ZIndex=4
     local function fromX(x)
-        local percent = math.clamp((x - trackHit.AbsolutePosition.X) / math.max(trackHit.AbsoluteSize.X, 1), 0, 1)
-        local value = minimum + math.floor(percent * (maximum - minimum) / step + 0.5) * step
-        setSetting(key, math.clamp(value, minimum, maximum))
+        local p=math.clamp((x-hit.AbsolutePosition.X)/math.max(hit.AbsoluteSize.X,1),0,1)
+        setSetting(key,math.clamp(minimum+math.floor(p*(maximum-minimum)/step+0.5)*step,minimum,maximum))
     end
-    refreshers[#refreshers + 1] = function()
-        local percent = (settings[key] - minimum) / (maximum - minimum)
-        fill.Size = UDim2.fromScale(percent, 1)        dot.Position = UDim2.new(percent, 0, 0.5, 0)
-        valueLabel.Text = string.format(step < 1 and "%.1f%s" or "%.0f%s", settings[key], unit or "")
+    refreshers[#refreshers+1]=function()
+        fill.Size=UDim2.fromScale((settings[key]-minimum)/(maximum-minimum),1)
+        valueLabel.Text=string.format(step<1 and "%.1f%s" or "%.0f%s",settings[key],unit or "")
     end
-    connect(trackHit.InputBegan, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDrag = {Input = input, Update = fromX}
+    connect(hit.InputBegan,function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            closeDropdown()
+            sliderDrag={Input=input,Update=fromX}
             fromX(input.Position.X)
-        elseif input.KeyCode == Enum.KeyCode.Left or input.KeyCode == Enum.KeyCode.Right then
-            setSetting(key, math.clamp(settings[key] + (input.KeyCode == Enum.KeyCode.Right and step or -step), minimum, maximum))
         end
     end)
-    divider(item, 70)
 end
-local function choices(pageName, titleText, key, options)
-    local item = row(pageName, 73)
-    label(item, titleText, 0, 5, contentW - 12, 21, 12)
-    local buttons = {}
-    local width = (contentW - 16 - (#options - 1) * 5) / #options
-    for i, option in ipairs(options) do
-        local value = option
-        local hit = button(item, option, (i - 1) * (width + 5), 33, width, 26)
-        hit.TextSize = 10
-        corner(hit, 3)
-        buttons[option] = hit
-        connect(hit.Activated, function() setSetting(key, value) end)
-    end
-    refreshers[#refreshers + 1] = function()
-        for value, hit in pairs(buttons) do
-            hit.BackgroundColor3 = settings[key] == value and theme.Hover or theme.Sidebar
-            hit.TextColor3 = settings[key] == value and theme.Accent or theme.Muted
+local displayOptions={
+    ["Голова"]="Head",["Корпус"]="Body",["Видимая"]="Visible point",
+    ["Прицел"]="Crosshair",["Ближайший"]="Distance",["Мало HP"]="Lowest health",
+    ["Назад"]="Backward",["Углы"]="Corners",["Рамка"]="Full box",
+    ["Мягкий"]="Soft",["Плотный"]="Solid",["Контур"]="Outline",["Пульс"]="Pulse",
+}
+local function choices(pageName,titleText,key,options)
+    local item=row(pageName,46)
+    label(item,titleText,20,0,contentW-44,17,11)
+    local hit=button(item,"",21,20,contentW-58,20)
+    hit.BorderSizePixel=1; hit.BorderColor3=Color3.new(0,0,0)
+    shade(hit,Color3.fromRGB(55,55,55),Color3.fromRGB(30,30,30))
+    hit.BackgroundColor3=Color3.new(1,1,1)
+    local valueLabel=label(hit,"",7,1,contentW-85,18,11)
+    label(hit,"▾",contentW-75,1,12,17,11,theme.Muted)
+    refreshers[#refreshers+1]=function() valueLabel.Text=displayOptions[settings[key]] or settings[key] end
+    connect(hit.Activated,function()
+        local wasOpen=hit:GetAttribute("DropdownOpen")
+        closeDropdown()
+        if wasOpen then return end
+        sliderDrag=nil
+        hit:SetAttribute("DropdownOpen",true)
+        local shield=button(gui,"",0,0,0,0)
+        shield.Name="DropdownShield"; shield.Size=UDim2.fromScale(1,1)
+        shield.BackgroundTransparency=1; shield.ZIndex=80
+        local scale=menuScale.Scale
+        local h=#options*22*scale
+        local x,y=hit.AbsolutePosition.X,hit.AbsolutePosition.Y+hit.AbsoluteSize.Y+2
+        local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+        if viewport and y+h>viewport.Y-8 then y=hit.AbsolutePosition.Y-h-2 end
+        local popup=new("Frame",{Name="Dropdown",Position=UDim2.fromOffset(x,math.max(8,y)),
+            Size=UDim2.fromOffset(hit.AbsoluteSize.X,h),BackgroundColor3=Color3.fromRGB(20,20,20),
+            BorderSizePixel=1,BorderColor3=Color3.new(0,0,0),ZIndex=81},shield)
+        local popupConnections={}
+        dropdownClose=function()
+            hit:SetAttribute("DropdownOpen",false)
+            for _,connection in ipairs(popupConnections) do connection:Disconnect() end
+            shield:Destroy()
         end
-    end
-    divider(item, 73)
+        popupConnections[#popupConnections+1]=shield.Activated:Connect(closeDropdown)
+        for i,option in ipairs(options) do
+            local value=option
+            local choice=button(popup,displayOptions[option] or option,0,(i-1)*22*scale,hit.AbsoluteSize.X,22*scale)
+            choice.TextSize=math.max(8,11*scale); choice.ZIndex=82
+            choice.TextColor3=settings[key]==option and theme.Accent or theme.Text
+            choice.BackgroundColor3=Color3.fromRGB(24,24,24)
+            popupConnections[#popupConnections+1]=choice.Activated:Connect(function() setSetting(key,value); closeDropdown() end)
+            popupConnections[#popupConnections+1]=choice.MouseEnter:Connect(function() choice.BackgroundColor3=Color3.fromRGB(43,43,43) end)
+            popupConnections[#popupConnections+1]=choice.MouseLeave:Connect(function() choice.BackgroundColor3=Color3.fromRGB(24,24,24) end)
+        end
+    end)
 end
 
-section("ESP", "Игроки", "Всё нужное — рядом с моделью.")
-toggle("ESP", "Ники игроков", "Names")
-toggle("ESP", "Расстояние", "Distance")
-toggle("ESP", "Боксы", "Boxes")
-choices("ESP", "Форма бокса", "BoxStyle", {"Углы", "Рамка"})
-toggle("ESP", "Полоса здоровья", "Health")
-toggle("ESP", "Скелет R6 / R15", "Skeleton")
-toggle("ESP", "Линии до игроков", "Tracers")
-toggle("ESP", "Предмет в руках", "Tool", "Название экипированного Tool")
-toggle("ESP", "Скрывать союзников", "TeamCheck")
-toggle("ESP", "Только видимые", "OnlyVisible", "Достаточно видимого края/макушки головы")
-slider("ESP", "Максимальная дистанция", "MaxDistance", 100, 3000, 50, " st")
-section("Эффекты", "Свет и контур", "Мягкий ореол, спокойная палитра.")
-toggle("Эффекты", "Подсветка модели", "Highlights")
-choices("Эффекты", "Стиль подсветки", "HighlightStyle", {"Мягкий", "Плотный", "Контур", "Пульс"})
-toggle("Эффекты", "Ореол у линий", "Glow")
-slider("Эффекты", "Плотность заливки", "FillOpacity", 0, 100, 1, "%")
-slider("Эффекты", "Яркость контура", "OutlineOpacity", 0, 100, 1, "%")
-slider("Эффекты", "Толщина линий", "Thickness", 1, 3, 0.5, " px")
-slider("Эффекты", "Скорость пульса", "PulseSpeed", 0.4, 2.4, 0.1, " Hz")
-toggle("Эффекты", "Цвет по видимости", "VisibilityColors", "Зелёный: виден · терракотовый: за препятствием")
-toggle("Эффекты", "Цвета команд", "TeamColors", "Используются, когда выключен цвет по видимости")
-toggle("Эффекты", "Метка головы", "HeadMarker", "Мини-точка на реально видимой части головы")
-toggle("Эффекты", "Фокус текущей цели", "TargetFocus", "Анимированные углы вокруг цели silent/auto fire")
+section("RAGE","Aimbot",1)
+toggle("RAGE","Enabled","SilentAim","Silent: поворот камеры → нажатие → отпускание → возврат")
+toggle("RAGE","Automatic fire","AutoFire","Только по живой видимой цели")
+toggle("RAGE","Check team","AimTeamCheck")
+toggle("RAGE","Visibility check","AimWallCheck","Проверка препятствий от камеры и головы")
+choices("RAGE","Target selection","TargetPriority",{"Прицел","Ближайший","Мало HP"})
+choices("RAGE","Target hitbox","AimPart",{"Голова","Корпус","Видимая"})
+slider("RAGE","Maximum FOV","AimFOV",5,360,5,"°")
+slider("RAGE","Maximum distance","AimDistance",50,3000,50," st")
+slider("RAGE","Target retention","TargetStickiness",0,50,5,"%")
+section("RAGE","Input",2)
+choices("RAGE","Fire method","FireMethod",{"VirtualUser","MouseButton","Creator"})
+slider("RAGE","Acquire delay","AcquireMS",0,100,5," ms")
+slider("RAGE","Camera settle time","ShotMS",0,100,5," ms")
+slider("RAGE","Press duration","HoldMS",10,100,5," ms")
+slider("RAGE","Automatic fire interval","FireInterval",60,1000,10," ms")
+section("RAGE","Target visuals",2)
+toggle("RAGE","Target focus","TargetFocus")
+toggle("RAGE","Head marker","HeadMarker")
+toggle("RAGE","Death particles","DeathShatter")
+
+section("LEGIT","Aimbot",1)
+toggle("LEGIT","Enabled (hold RMB)","AimEnabled","Обычный aim: удерживать правую кнопку мыши")
+slider("LEGIT","Aim response","AimSmooth",2,40,1,"")
+slider("LEGIT","Maximum FOV","AimFOV",5,360,5,"°")
+slider("LEGIT","Maximum distance","AimDistance",50,3000,50," st")
+section("LEGIT","Target selection",2)
+choices("LEGIT","Priority","TargetPriority",{"Прицел","Ближайший","Мало HP"})
+choices("LEGIT","Hitbox","AimPart",{"Голова","Корпус","Видимая"})
+toggle("LEGIT","Check team","AimTeamCheck")
+toggle("LEGIT","Visibility check","AimWallCheck")
+slider("LEGIT","Target retention","TargetStickiness",0,50,5,"%")
+
+section("ANTI-AIM","Anti-aimbot angles",1)
+toggle("ANTI-AIM","Enabled","AntiAim","Поворачивает персонажа; репликация зависит от плейса")
+choices("ANTI-AIM","Yaw mode","AntiMode",{"Назад","Jitter","Spin"})
+slider("ANTI-AIM","Yaw offset","AntiYaw",-180,180,5,"°")
+section("ANTI-AIM","Modifiers",2)
+slider("ANTI-AIM","Jitter range","AntiJitter",0,120,5,"°")
+slider("ANTI-AIM","Jitter interval","AntiPeriod",50,500,10," ms")
+slider("ANTI-AIM","Spin speed","AntiSpeed",30,720,30,"°/s")
+
+section("VISUALS","Player ESP",1)
+toggle("VISUALS","Enabled","Enabled")
+toggle("VISUALS","Player name","Names")
+toggle("VISUALS","Bounding box","Boxes")
+choices("VISUALS","Box style","BoxStyle",{"Углы","Рамка"})
+toggle("VISUALS","Health bar","Health")
+toggle("VISUALS","Skeleton","Skeleton")
+toggle("VISUALS","Weapon text","Tool")
+toggle("VISUALS","Distance","Distance")
+toggle("VISUALS","Tracers","Tracers")
+section("VISUALS","Filters",2)
+toggle("VISUALS","Ignore teammates","TeamCheck")
+toggle("VISUALS","Visible only","OnlyVisible")
+slider("VISUALS","Maximum distance","MaxDistance",100,3000,50," st")
+section("VISUALS","Extra",2)
+toggle("VISUALS","Offscreen arrows","Arrows")
+toggle("VISUALS","Look direction","LookDirection")
+slider("VISUALS","Look length","LookLength",3,24,1," st")
+toggle("VISUALS","Velocity vector","Velocity")
+
+section("EFFECTS","Player glow",1)
+toggle("EFFECTS","Enabled","Highlights")
+choices("EFFECTS","Glow style","HighlightStyle",{"Мягкий","Плотный","Контур","Пульс"})
+slider("EFFECTS","Fill opacity","FillOpacity",0,100,1,"%")
+slider("EFFECTS","Outline opacity","OutlineOpacity",0,100,1,"%")
+toggle("EFFECTS","Line glow","Glow")
+slider("EFFECTS","Line thickness","Thickness",1,3,0.5," px")
+slider("EFFECTS","Pulse speed","PulseSpeed",0.4,2.4,0.1," Hz")
+section("EFFECTS","Colors",2)
+toggle("EFFECTS","Visibility colors","VisibilityColors")
+toggle("EFFECTS","Team colors","TeamColors")
 do
-    local item = row("Эффекты", 62)
-    label(item, "Основной цвет", 0, 6, 180, 19, 12)
-    for i, color in ipairs(palette) do
-        local colorIndex = i
-        local hit = button(item, "", (i - 1) * 42, 30, 32, 22)
-        hit.BackgroundColor3 = color
-        corner(hit, 3)
-        local border = stroke(hit, theme.Text, 1)
-        refreshers[#refreshers + 1] = function() border.Transparency = settings.ColorIndex == colorIndex and 0 or 1 end
-        connect(hit.Activated, function() setSetting("ColorIndex", colorIndex) end)
+    local item=row("EFFECTS",42)
+    label(item,"ESP color",20,0,150,16,11)
+    for i,color in ipairs(palette) do
+        local index=i
+        local hit=button(item,"",20+(i-1)*42,22,32,12)
+        hit.BackgroundColor3=color
+        local border=stroke(hit,theme.Text)
+        refreshers[#refreshers+1]=function() border.Transparency=settings.ColorIndex==index and 0 or 0.8 end
+        connect(hit.Activated,function() setSetting("ColorIndex",index) end)
     end
 end
-section("Навигация", "Ориентация", "Радар поворачивается вместе с камерой.")
-toggle("Навигация", "Радар", "Radar", "Игроки за пределами радиуса — на краю круга")
-slider("Навигация", "Радиус радара", "RadarRange", 50, 1000, 25, " st")
-toggle("Навигация", "Стрелки за экраном", "Arrows")
-toggle("Навигация", "Направление головы", "LookDirection", "Линия показывает поворот Head")
-slider("Навигация", "Длина линии взгляда", "LookLength", 3, 24, 1, " st")
-toggle("Навигация", "Движение и скорость", "Velocity", "Вектор движения + скорость в studs/сек")
+section("EFFECTS","Indicators",2)
+toggle("EFFECTS","Head marker","HeadMarker")
+toggle("EFFECTS","Target focus","TargetFocus")
+toggle("EFFECTS","Death particles","DeathShatter")
 
-section("Бой", "Наведение", "Silent: ЛКМ · Обычный aim: удерживать ПКМ")
-toggle("Бой", "Silent через камеру", "SilentAim", "Поворот → выстрел → отпускание → возврат камеры")
-toggle("Бой", "Обычный aim", "AimEnabled", "Плавное наведение при удержании ПКМ")
-slider("Бой", "Скорость обычного aim", "AimSmooth", 2, 40, 1, "")
-toggle("Бой", "Автовыстрел", "AutoFire", "Только по живой видимой цели; требует silent")
-toggle("Бой", "Проверка стен", "AimWallCheck", "Проверяется от камеры и головы своего персонажа")
-toggle("Бой", "Не стрелять в союзников", "AimTeamCheck")
-slider("Бой", "FOV наведения", "AimFOV", 5, 360, 5, "°")
-slider("Бой", "Дальность наведения", "AimDistance", 50, 3000, 50, " st")
-choices("Бой", "Точка попадания", "AimPart", {"Голова", "Корпус", "Видимая"})
-choices("Бой", "Приоритет цели", "TargetPriority", {"Прицел", "Ближайший", "Мало HP"})
-slider("Бой", "Удержание цели", "TargetStickiness", 0, 50, 5, "%")
-section("Бой", "Выстрел", "Tool — Tool:Activate; VirtualUser — виртуальный ЛКМ")
-choices("Бой", "Метод выстрела", "FireMethod", {"Tool", "VirtualUser"})
-slider("Бой", "Задержка захвата", "AcquireMS", 0, 100, 5, " ms")
-slider("Бой", "Задержка после поворота", "ShotMS", 0, 100, 5, " ms")
-slider("Бой", "Удержание выстрела", "HoldMS", 10, 100, 5, " ms")
-slider("Бой", "Интервал автовыстрела", "FireInterval", 60, 1000, 10, " ms")
-section("Бой", "Anti-aim", "Поворот персонажа; видимость другим зависит от сервера")
-toggle("Бой", "Включить anti-aim", "AntiAim")
-choices("Бой", "Режим поворота", "AntiMode", {"Назад", "Jitter", "Spin"})
-slider("Бой", "Смещение yaw", "AntiYaw", -180, 180, 5, "°")
-slider("Бой", "Размах jitter", "AntiJitter", 0, 120, 5, "°")
-slider("Бой", "Период jitter", "AntiPeriod", 50, 500, 10, " ms")
-slider("Бой", "Скорость spin", "AntiSpeed", 30, 720, 30, "°/s")
-section("Бой", "Эффект смерти", "HP ≤ 0 / Dead / удаление Character сразу убирают ESP")
-toggle("Бой", "Рассыпание модели", "DeathShatter", "Локальный эффект смерти")
-
-local combatKeys = {
-    SilentAim=true, AutoFire=true, AimTeamCheck=true, AimFOV=true, AimDistance=true,
-    AimPart=true, HeadMarker=true, TargetFocus=true, DeathShatter=true,
-    AimEnabled=true, AimSmooth=true, TargetPriority=true, TargetStickiness=true,
-    AcquireMS=true, ShotMS=true, HoldMS=true, FireInterval=true, FireMethod=true,
-    AimWallCheck=true, AntiAim=true, AntiMode=true, AntiYaw=true, AntiJitter=true,
-    AntiSpeed=true, AntiPeriod=true,
+section("MISC","Radar",1)
+toggle("MISC","Enabled","Radar")
+slider("MISC","Radar range","RadarRange",50,1000,25," st")
+section("MISC","Interface",2)
+do
+    local item=row("MISC",62)
+    label(item,"Menu  [ INS / RightShift ]",20,0,contentW-44,18,11)
+    label(item,"Unload  [ END ]",20,21,contentW-44,18,11)
+    label(item,"Aim  [ hold MOUSE2 ]",20,42,contentW-44,18,11)
+end
+local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,AimDistance=true,
+    AimPart=true,HeadMarker=true,TargetFocus=true,DeathShatter=true,AimEnabled=true,AimSmooth=true,
+    TargetPriority=true,TargetStickiness=true,AcquireMS=true,ShotMS=true,HoldMS=true,FireInterval=true,
+    FireMethod=true,AimWallCheck=true,AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true}
+local profiles={
+    {Name="Clean",Values={Boxes=false,Distance=false,Radar=false,Arrows=false,VisibilityColors=false,Tool=false,HighlightStyle="Контур",Glow=false}},
+    {Name="Tactical",Values={}},
+    {Name="Detailed",Values={Skeleton=true,Tracers=true,LookDirection=true,Velocity=true,HighlightStyle="Пульс"}},
 }
-
-local profiles = {
-    {Name = "Чистый", Description = "Имена, здоровье, мягкий контур. Меньше деталей.",
-        Values = {Boxes = false, Distance = false, Radar = false, Arrows = false,
-            VisibilityColors = false, Tool = false, HighlightStyle = "Контур", Glow = false}},
-    {Name = "Тактический", Description = "Углы, видимость, предметы, радар и стрелки.", Values = {}},
-    {Name = "Подробный", Description = "Все слои ESP, скелет, взгляд и движение.",
-        Values = {Skeleton = true, Tracers = true, LookDirection = true, Velocity = true,
-            HighlightStyle = "Пульс"}},
-}
-section("Профили", "Готовые пресеты", "Применяются сразу. Настройки — на текущую сессию.")
-for _, profile in ipairs(profiles) do
-    local preset = profile
-    local item = row("Профили", 83)
-    local hit = button(item, "", 0, 7, contentW - 10, 66)
-    corner(hit, 5)
-    local border = stroke(hit)
-    label(hit, profile.Name, 12, 10, contentW - 50, 21, 13, theme.Text, Enum.Font.GothamMedium)
-    label(hit, profile.Description, 12, 36, contentW - 39, 18, 10, theme.Muted)
-    refreshers[#refreshers + 1] = function()
-        border.Color = profileName == preset.Name and theme.Accent or theme.Line
-    end
-    connect(hit.Activated, function()
-        for key, value in pairs(defaults) do
-            if not combatKeys[key] then settings[key] = value end
-        end
-        for key, value in pairs(preset.Values) do settings[key] = value end
-        profileName = preset.Name
-        metadataDue = 0
-        refreshUI()
+section("CONFIG","Visual presets",1)
+for _,profile in ipairs(profiles) do
+    local preset=profile
+    local item=row("CONFIG",29)
+    local hit=button(item,profile.Name,20,2,contentW-58,23)
+    hit.BorderSizePixel=1; hit.BorderColor3=Color3.new(0,0,0)
+    shade(hit,Color3.fromRGB(60,60,60),Color3.fromRGB(33,33,33))
+    hit.BackgroundColor3=Color3.new(1,1,1)
+    refreshers[#refreshers+1]=function() hit.TextColor3=profileName==preset.Name and theme.Accent or theme.Text end
+    connect(hit.Activated,function()
+        for key,value in pairs(defaults) do if not combatKeys[key] then settings[key]=value end end
+        for key,value in pairs(preset.Values) do settings[key]=value end
+        profileName=preset.Name; metadataDue=0; refreshUI()
     end)
 end
-local unloadRow = row("Профили", 59)
-local unload = button(unloadRow, "Выгрузить Spectra", 0, 15, contentW - 10, 32)
-unload.TextColor3 = theme.Muted
-corner(unload, 4)
-connect(unload.Activated, function() if cleanup then cleanup() end end)
+section("CONFIG","Session",2)
+local unloadRow=row("CONFIG",29)
+local unload=button(unloadRow,"Unload",20,2,contentW-58,23)
+unload.BorderSizePixel=1; unload.BorderColor3=Color3.new(0,0,0)
+connect(unload.Activated,function() if cleanup then cleanup() end end)
 
-local launcher = button(gui, "VISUALS", 22, 65, 88, 29)
+
+local launcher = button(gui, BRAND_NAME, 22, 65, 88, 24)
 launcher.Name = "OpenMenu"
 launcher.ZIndex = 30
 launcher.TextSize = 10
-corner(launcher, 5)
-stroke(launcher)
+stroke(launcher, theme.Line)
 local menuTransition = 0
 local function setMenuOpen(open)
     menuOpen = open
+    closeDropdown()
+    footerHint = nil
     master.Modal = open
     menuTransition = menuTransition + 1
     local generation = menuTransition
@@ -517,6 +680,7 @@ local function clampMenu()
         math.clamp(menu.Position.Y.Offset, safeTop, math.max(safeTop, viewport.Y - size.Y - 8)))
 end
 local function updateLayout(viewport)
+    closeDropdown()
     lastViewport = viewport
     local inset = GuiService:GetGuiInset()
     safeTop = math.max(10, inset.Y + 8)
@@ -529,6 +693,7 @@ end
 local menuDrag
 connect(header.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        closeDropdown()
         menuDrag = {Input = input, Start = Vector2.new(input.Position.X, input.Position.Y), Position = menu.Position}
     end
 end)
@@ -549,7 +714,7 @@ end)
 connect(UserInputService.WindowFocusReleased, function() sliderDrag = nil menuDrag = nil end)
 connect(UserInputService.InputBegan, function(input, processed)
     if processed or UserInputService:GetFocusedTextBox() then return end
-    if input.KeyCode == Enum.KeyCode.RightShift then setMenuOpen(not menuOpen)
+    if input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then setMenuOpen(not menuOpen)
     elseif input.KeyCode == Enum.KeyCode.End then if cleanup then cleanup() end end
 end)
 
@@ -977,6 +1142,8 @@ local function startCombat()
     local TARGET_REFRESH = 0.05
     local PRE_CAMERA = RENDER_NAME .. "_Restore"
     local syntheticInput, consumedClick = false, false
+    local bindFireAction
+    local inputRebindToken = 0
     local pressed, antiState
     local spinAngle = 0
     local serviceConnections, watchers = {}, {}
@@ -1128,40 +1295,82 @@ local function startCombat()
         currentTarget, currentPart = player, part
         controller.Target = player
     end
+    -- Aim never reads an equipped weapon. The selected input backend is independent.
+    local function resolveInputAdapter(method)
+        if method == "Creator" then
+            if not creatorInputAdapter then return nil, "Creator adapter is not configured" end
+            return creatorInputAdapter
+        end
+        if method == "MouseButton" then
+            if type(mouse1press) ~= "function" or type(mouse1release) ~= "function" then
+                return nil, "MouseButton API is unavailable; select VirtualUser or Creator"
+            end
+            -- Snapshot both functions so release uses the same backend as press.
+            local press, release = mouse1press, mouse1release
+            return {Press=function() press() end, Release=function() release() end}
+        end
+        if method == "VirtualUser" then
+            return {
+                Press=function(context)
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button1Down(context.MousePosition, context.Camera.CFrame)
+                end,
+                Release=function(context)
+                    VirtualUser:Button1Up(context.MousePosition, context.Camera.CFrame)
+                end,
+            }
+        end
+        return nil, "Unknown input method"
+    end
     local function releaseInput()
         local input = pressed
         pressed = nil
         if not input then return end
+        local wasSynthetic = syntheticInput
         syntheticInput = true
-        local ok, err = pcall(function()
-            if input.Tool then input.Tool:Deactivate()
-            else VirtualUser:Button1Up(input.Position, input.Camera.CFrame) end
-        end)
-        syntheticInput = false
-        if not ok then warn("Spectra input release: " .. tostring(err)) end
+        local ok, result, reason = pcall(input.Adapter.Release, input.Context)
+        syntheticInput = wasSynthetic
+        if not ok or result == false then
+            warn("Spectra input release: " .. tostring(ok and reason or result))
+        end
+        if input.Synthetic then
+            inputRebindToken = inputRebindToken + 1
+            local token = inputRebindToken
+            -- Generated mouse events may be delivered after the API call returns.
+            task.delay(0.05, function()
+                if controller.Running and token == inputRebindToken and not pressed and bindFireAction then
+                    bindFireAction()
+                end
+            end)
+        end
     end
     local function pressInput(camera)
-        if pressed then return false, "Выстрел уже удерживается" end
-        local character = ownCharacter()
-        local tool = character and character:FindFirstChildOfClass("Tool")
-        if settings.FireMethod == "Tool" and (not tool or not tool.Enabled) then
-            return false, "Нет активного Tool; проверь метод выстрела"
+        if pressed then return false, "Input is already held" end
+        local adapter, errorMessage = resolveInputAdapter(settings.FireMethod)
+        if not adapter then return false, errorMessage end
+        local context = {
+            Camera=camera, MousePosition=UserInputService:GetMouseLocation(),
+            Target=shot and shot.Player, Character=shot and shot.Character,
+            Part=shot and shot.Part, AimPosition=shot and shot.Point,
+            Automatic=shot and shot.Auto or false,
+        }
+        local input = {Adapter=adapter, Context=context, Synthetic=settings.FireMethod ~= "Creator"}
+        if input.Synthetic then
+            inputRebindToken = inputRebindToken + 1
+            ContextActionService:UnbindAction(ACTION)
         end
-        local input = settings.FireMethod == "Tool" and {Tool=tool}
-            or {Position=UserInputService:GetMouseLocation(), Camera=camera}
         pressed = input
+        local wasSynthetic = syntheticInput
         syntheticInput = true
-        local ok, err = pcall(function()
-            if input.Tool then input.Tool:Activate()
-            else
-                VirtualUser:CaptureController()
-                VirtualUser:Button1Down(input.Position, camera.CFrame)
-            end
-        end)
-        syntheticInput = false
-        if not ok then releaseInput() return false, "Метод недоступен: " .. tostring(err) end
+        local ok, result, reason = pcall(adapter.Press, context)
+        syntheticInput = wasSynthetic
+        if not ok or result == false then
+            releaseInput()
+            return false, "Input failed: " .. tostring(ok and reason or result)
+        end
         return true
     end
+
     local function restoreShot(_, status)
         local previous = shot
         releaseInput()
@@ -1245,6 +1454,7 @@ local function startCombat()
         local point = validPoint(camera, shot.Part, shot.Character, shot.Auto)
         if not point then restoreShot(camera, "Цель скрылась / вне FOV") return end
         camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+        shot.Point = point
         shot.Applied = true
         if shot.Phase == "Aim" and now >= shot.FireAt then
             local activeShot = shot
@@ -1284,7 +1494,12 @@ local function startCombat()
         end
         return Enum.ContextActionResult.Pass
     end
-    ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000, Enum.UserInputType.MouseButton1)
+    bindFireAction = function()
+        consumedClick = false
+        ContextActionService:UnbindAction(ACTION)
+        ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000, Enum.UserInputType.MouseButton1)
+    end
+    bindFireAction()
     local function suspend()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
@@ -1622,6 +1837,7 @@ local combat = startCombat()
 cleanup = function()
     if not alive then return end
     alive = false
+    closeDropdown()
     combat:Stop()
     RunService:UnbindFromRenderStep(RENDER_NAME)
     for _, connection in ipairs(connections) do connection:Disconnect() end
@@ -1674,7 +1890,7 @@ local function render(dt)
     end
     smoothedFPS = smoothedFPS + ((1 / math.max(dt, 0.001)) - smoothedFPS) * math.min(dt * 3, 1)
     if now >= statsDue then
-        footer.Text = string.format("%s  ·  %d игроков     /     %d FPS     /     RightShift — меню", profileName, count, math.floor(smoothedFPS + 0.5))
+        footer.Text = footerHint or string.format("%s  |  %s  |  %d players  |  %d fps                         INS / RSHIFT", BRAND_NAME, profileName, count, math.floor(smoothedFPS + 0.5))
         radarTitle.Text = string.format("RADAR  /  %d st", settings.RadarRange)
         statsDue = now + 0.4
     end
@@ -1688,3 +1904,31 @@ RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 50, 
         cleanup()
     end
 end)
+
+-- Portable creator API: no PlaceId, RemoteEvent names, weapon paths, or HTTP calls in main.lua.
+local api = {Version="8.0.0"}
+function api:Set(key,value)
+    if not alive then return false,"Spectra is unloaded" end
+    return setSetting(key,value)
+end
+function api:GetSettings()
+    local copy={}
+    for key,value in pairs(settings) do copy[key]=value end
+    return copy
+end
+function api:SetInputAdapter(adapter)
+    if not alive then return false,"Spectra is unloaded" end
+    if adapter ~= nil and (type(adapter) ~= "table" or type(adapter.Press) ~= "function"
+        or type(adapter.Release) ~= "function") then return false,"Expected Press and Release functions" end
+    combat:Pause()
+    creatorInputAdapter=adapter and {Press=adapter.Press,Release=adapter.Release} or nil
+    return true
+end
+function api:GetState()
+    return {Running=alive,Target=combat.Target,Status=combat.Status,MenuOpen=menuOpen}
+end
+function api:OpenMenu(open)
+    if alive then setMenuOpen(open ~= false) end
+end
+function api:Unload() cleanup() end
+return api

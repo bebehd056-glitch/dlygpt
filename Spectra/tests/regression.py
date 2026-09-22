@@ -56,13 +56,14 @@ local controller = {}
 local released = 0
 local VirtualUser = {Button1Up=function() released=released+1 end}
 local function warn() end
+local mockAdapter = {Release=function() released=released+1 end}
 '''
 lua += section('    local function releaseInput()', '    local function pressInput(')
 lua += section('    local function restoreShot(', '    -- Restore before Roblox')
 lua += r'''
 local oldCamera, nextCamera = {CFrame='flick'}, {CFrame='new-view'}
 shot = {Camera=oldCamera, Applied=true, Base='original'}
-pressed = {Camera=oldCamera}
+pressed = {Adapter=mockAdapter, Context={Camera=oldCamera}}
 restoreShot(nextCamera, 'cancel')
 check(oldCamera.CFrame == 'original', 'camera swap restores the old camera')
 check(nextCamera.CFrame == 'new-view', 'camera swap leaves new camera intact')
@@ -90,7 +91,7 @@ local victim, victimHumanoid, victimCharacter = playerWithHealth(10)
 visuals[victim] = {Character=victimCharacter, Eligible=true}
 currentTarget = victim
 shot = {Character=victimCharacter, Camera=oldCamera, Base='normal', Applied=true}
-pressed = {Camera=oldCamera}
+pressed = {Adapter=mockAdapter, Context={Camera=oldCamera}}
 pendingAcquire = {Character=newCharacter}
 markDead(victim, victimCharacter)
 check(visuals[victim].Hidden and not visuals[victim].Eligible, 'death hides ESP immediately')
@@ -115,7 +116,7 @@ local activePart = {IsDescendantOf=function() return true end}
 local camera = {CFrame={Position='origin', UpVector='up'}}
 local shouldDieOnActivate = false
 local function pressInput(c)
-    pressed = {Camera=c}
+    pressed = {Adapter=mockAdapter, Context={Camera=c}}
     if shouldDieOnActivate then restoreShot(c) end
     return true
 end
@@ -166,7 +167,7 @@ local function findTarget() if hasTarget then return victim, activePart end end
 local function beginClick() return true end
 workspace.CurrentCamera = camera
 '''
-lua += section('    local function fireAction(', '    ContextActionService:BindActionAtPriority(')
+lua += section('    local function fireAction(', '    bindFireAction = function()')
 lua += r'''
 check(fireAction(nil, 'Begin') == 'Pass', 'no target preserves ordinary click')
 hasTarget = true

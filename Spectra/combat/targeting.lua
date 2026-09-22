@@ -8,6 +8,7 @@ return function(ctx)
     local visibility = assert(ctx.Visibility, "Targeting: Visibility missing")
     local isTeammate = assert(ctx.IsTeammate, "Targeting: IsTeammate missing")
     local getLocalHead = assert(ctx.GetLocalHead, "Targeting: GetLocalHead missing")
+    local adapter = ctx.Adapter
 
     local function withinFOV(forward, delta)
         local magnitude = delta.Magnitude
@@ -16,40 +17,22 @@ return function(ctx)
         return forward:Dot(delta / magnitude) >= math.cos(math.rad(settings.AimFOV * 0.5))
     end
 
-    local function addPart(list, part)
-        if part and part:IsA("BasePart") then list[#list + 1] = part end
-    end
-
-    local function parts(character)
+    local function parts(character, mode)
+        if adapter then return adapter:GetAimParts(character, mode or settings.AimPart) end
         local result = {}
         local head = character:FindFirstChild("Head")
         local upper = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
         local lower = character:FindFirstChild("LowerTorso")
         local root = character:FindFirstChild("HumanoidRootPart")
-
-        if settings.AimPart == "Голова" then
-            addPart(result, head)
-            return result
-        elseif settings.AimPart == "Корпус" then
-            addPart(result, upper or lower or root)
-            addPart(result, lower)
-            return result
-        end
-
-        addPart(result, head)
-        addPart(result, upper)
-        addPart(result, lower)
-        local limbNames = {
-            "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm","LeftHand","RightHand",
-            "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","LeftFoot","RightFoot",
-            "Left Arm","Right Arm","Left Leg","Right Leg",
-        }
-        for _, name in ipairs(limbNames) do addPart(result, character:FindFirstChild(name)) end
-        addPart(result, root)
+        local selected = mode or settings.AimPart
+        local function add(part) if part and part:IsA("BasePart") then result[#result + 1] = part end end
+        if selected == "Голова" or selected == "Head" then add(head); return result end
+        if selected == "Корпус" or selected == "Torso" then add(upper or lower or root); add(lower); return result end
+        add(head); add(upper); add(lower); add(root)
         return result
     end
 
-    local function score(player, humanoid, part, origin, forward, currentTarget)
+    local function score(player, humanoid, character, part, origin, forward, currentTarget)
         local delta = part.Position - origin
         local distance = delta.Magnitude
         if distance < 0.05 or distance > settings.AimDistance or not withinFOV(forward, delta) then
@@ -59,7 +42,9 @@ return function(ctx)
         if settings.TargetPriority == "Ближайший" then
             value = distance / math.max(settings.AimDistance, 1)
         elseif settings.TargetPriority == "Мало HP" then
-            value = humanoid.Health / math.max(humanoid.MaxHealth, 1)
+            local health, maximum = adapter and adapter:GetHealth(character)
+                or humanoid.Health, humanoid.MaxHealth
+            value = (health or humanoid.Health) / math.max(maximum or humanoid.MaxHealth, 1)
         else
             value = 1 - math.clamp(forward:Dot(delta / distance), -1, 1)
         end
@@ -93,17 +78,17 @@ return function(ctx)
         return withinFOV(forward, delta)
     end
 
-    function api:Find(camera, rayParams, currentTarget, forceVisibility)
+    function api:Find(camera, rayParams, currentTarget, forceVisibility, partMode)
         local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
         local candidates = {}
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= localPlayer and not (settings.AimTeamCheck and isTeammate(player)) then
                 local character, humanoid = alive:IsAlive(player)
                 if character then
-                    local candidateParts = parts(character)
+                    local candidateParts = parts(character, partMode)
                     local best = math.huge
                     for _, part in ipairs(candidateParts) do
-                        local value = score(player, humanoid, part, origin, forward, currentTarget)
+                        local value = score(player, humanoid, character, part, origin, forward, currentTarget)
                         if value and value < best then best = value end
                     end
                     if best < math.huge then

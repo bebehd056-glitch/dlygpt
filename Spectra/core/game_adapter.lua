@@ -27,6 +27,12 @@ return function(ctx)
         return player and player.Character or nil
     end
 
+    function api:GetPlayerFromCharacter(character)
+        local value, handled = call("GetPlayerFromCharacter", character)
+        if handled then return value end
+        return character and Players:GetPlayerFromCharacter(character) or nil
+    end
+
     function api:GetHumanoid(character)
         local value, handled = call("GetHumanoid", character)
         if handled then return value end

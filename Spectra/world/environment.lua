@@ -65,6 +65,7 @@ return function(ctx)
 
     local function applyLightingMode()
         local mode = settings.WorldLightingMode or "Game"
+        if settings.AuroraSky and mode == "Game" then mode = "Aurora" end
         if mode == lastLightingMode then return end
         if mode == "Game" then
             restoreLighting()

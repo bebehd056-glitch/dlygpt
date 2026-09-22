@@ -98,6 +98,8 @@ check('environment:Update(camera, now)' in main, "environment update not wired")
 check('environment:Stop()' in main, "environment cleanup not wired")
 check('chams:Update(now)' in main and 'chams:Stop()' in main, "chams lifecycle incomplete")
 check('function api:SetGameAdapter(adapter)' in main, "runtime GameAdapter API missing")
+check('startup.ModuleResolver' in main and 'moduleResolver' in main,
+      "local ModuleResolver distribution path missing")
 
 check('spectra-v7-rework' in loader, "branch loader does not point to rework branch")
 check('_G.SpectraOptions.ModuleRoot = ROOT' in loader, "loader does not propagate module root")

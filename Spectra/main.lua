@@ -1516,6 +1516,18 @@ local function startCombat()
             or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
         antiAim:Update(dt, camera, now, blocked() or busy)
     end
+    local function resolveAutoSource()
+        if not settings.AutoFire then return nil end
+        if settings.AutoFireSource == "Silent" then
+            return settings.SilentAim and "Silent" or nil
+        elseif settings.AutoFireSource == "Motion" then
+            return settings.AimEnabled and "Motion" or nil
+        end
+        if settings.SilentAim then return "Silent" end
+        if settings.AimEnabled then return "Motion" end
+        return nil
+    end
+
     local function beginClick(auto, player, part)
         if pendingAcquire or shot or blocked() or not settings.SilentAim then return false end
         if auto and os.clock() < autoFireDue then return false end
@@ -1524,6 +1536,21 @@ local function startCombat()
         restoreAnti()
         return true
     end
+
+    local function beginMotionAuto(camera, player, character, part, aimPoint, now)
+        if pendingAcquire or shot or pressed or blocked() or not settings.AimEnabled
+            or not settings.AutoFire or now < autoFireDue then return false end
+        if not player or not character or not part or not aimPoint then return false end
+        shot = {
+            Camera=camera, Base=camera.CFrame, Player=player, Character=character,
+            Part=part, Point=aimPoint, FireAt=now, Auto=true, NoFlick=true,
+            Phase="Aim", Expires=now + 1,
+        }
+        setTarget(player, part)
+        restoreAnti()
+        return true
+    end
+
     local function acquireForShot(camera, now)
         if not pendingAcquire or now < pendingAcquire.At then return end
         local request = pendingAcquire
@@ -1536,12 +1563,14 @@ local function startCombat()
         if not point then controller.Status = "Цель потеряна" return end
         shot = {Camera=camera, Base=camera.CFrame, Player=request.Player, Character=request.Character,
             Part=request.Part, Point=point, FireAt=now + settings.ShotMS / 1000, Auto=request.Auto,
-            Phase="Aim", Expires=now + 1}
+            NoFlick=false, Phase="Aim", Expires=now + 1}
         setTarget(request.Player, request.Part)
     end
+
     local function updateShot(camera, now)
         if not shot then return end
-        if blocked() or not settings.SilentAim or camera ~= shot.Camera or now > shot.Expires
+        local sourceEnabled = shot.NoFlick and settings.AimEnabled or settings.SilentAim
+        if blocked() or not sourceEnabled or camera ~= shot.Camera or now > shot.Expires
             or (shot.Auto and not settings.AutoFire) or not enemyAlive(shot.Player, shot.Character)
             or not shot.Part:IsDescendantOf(shot.Character) then
             restoreShot(camera, "Выстрел отменён")
@@ -1549,30 +1578,42 @@ local function startCombat()
         end
 
         updateFilter(camera)
-        local point = validPoint(camera, shot.Part, shot.Character, shot.Auto)
+        local point = validPoint(camera, shot.Part, shot.Character, true)
         if not point then
             restoreShot(camera, "Цель скрылась / вне FOV")
             return
         end
-        shot.Point = point
+
+        if shot.NoFlick then
+            local motionPlayer, motionCharacter, motionPart, motionPoint = motionAim:GetTarget()
+            if motionPlayer == shot.Player and motionCharacter == shot.Character
+                and motionPart == shot.Part and motionPoint then
+                point = motionPoint
+            end
+            shot.Point = point
+            if not motionAim:IsAligned(camera) then return end
+        else
+            shot.Point = point
+        end
 
         if shot.Phase == "Aim" and now >= shot.FireAt then
-            -- Flick exists only around the input call and is restored in the same render step.
-            -- This removes the visible tug-of-war with Roblox's camera controller.
             shot.Base = camera.CFrame
-            camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
-            shot.Applied = true
+
+            if not shot.NoFlick then
+                -- Silent: flick only around the input call, then restore in the same render step.
+                camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+                shot.Applied = true
+            end
 
             telemetry:RecordShot(shot.Player, shot.Character, shot.Part, shot.Base.Position, point)
             local activeShot = shot
             local fired, reason = pressInput(camera)
 
-            if camera == workspace.CurrentCamera then
+            if not shot.NoFlick and camera == workspace.CurrentCamera then
                 camera.CFrame = shot and shot.Base or camera.CFrame
             end
             if shot then shot.Applied = false end
 
-            -- Tool callbacks may synchronously kill the target and cancel the shot.
             if shot ~= activeShot then
                 releaseInput()
                 return
@@ -1586,7 +1627,7 @@ local function startCombat()
             shot.Phase = "Hold"
             shot.ReleaseAt = now + settings.HoldMS / 1000
             autoFireDue = now + settings.FireInterval / 1000
-            controller.Status = "Ввод отправлен: " .. shot.Player.DisplayName
+            controller.Status = (shot.NoFlick and "Motion fire: " or "Silent fire: ") .. shot.Player.DisplayName
         elseif shot.Phase == "Hold" and now >= shot.ReleaseAt then
             restoreShot(camera)
         end
@@ -1622,6 +1663,7 @@ local function startCombat()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
         restoreAnti()
+        motionAim:Clear()
         setTarget(nil, nil)
         targetMarker.Visible = false
     end
@@ -1808,6 +1850,7 @@ local function startCombat()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
         restoreAnti()
+        motionAim:Clear()
         setTarget(nil, nil)
         candidateDue = 0
         autoFireDue = 0
@@ -1833,65 +1876,60 @@ local function startCombat()
         else
             if not settings.SilentAim then
                 pendingAcquire = nil
-                restoreShot(camera)
+                if shot and not shot.NoFlick then restoreShot(camera) end
             end
+
             acquireForShot(camera, now)
             if shot then
                 updateShot(camera, now)
             else
-                local point
-                if not aiming then
-                    setTarget(nil, nil)
-                else
-                    -- Keep a valid target locked. Re-scan only after it becomes invalid,
-                    -- preventing target swaps every refresh tick and the resulting crosshair jerk.
+                local silentPoint
+                if settings.SilentAim then
                     if currentTarget and currentPart then
                         updateFilter(camera)
-                        local character = currentTarget.Character
-                        point = enemyAlive(currentTarget) and character
+                        local character = GameAdapter:GetCharacter(currentTarget)
+                        silentPoint = enemyAlive(currentTarget) and character
                             and currentPart:IsDescendantOf(character)
-                            and validPoint(camera, currentPart, character,
-                                settings.AutoFire and settings.SilentAim)
-                        if not point then
+                            and validPoint(camera, currentPart, character, true)
+                        if not silentPoint then
                             setTarget(nil, nil)
                             candidateDue = 0
                         end
                     end
 
                     if not currentTarget and now >= candidateDue then
-                        local player, part = findTarget(camera, settings.AutoFire and settings.SilentAim)
+                        local player, part, foundPoint = findTarget(camera, true, settings.AimPart)
                         setTarget(player, part)
+                        silentPoint = foundPoint
                         candidateDue = now + TARGET_REFRESH
-                        if player and part then
-                            local character = player.Character
-                            point = character and validPoint(camera, part, character,
-                                settings.AutoFire and settings.SilentAim)
-                            if not point then
-                                setTarget(nil, nil)
-                                candidateDue = 0
-                            end
-                        end
                     end
-
-                    if currentTarget and settings.AimEnabled
-                        and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-                        if not point then
-                            local character = currentTarget.Character
-                            point = character and currentPart
-                                and validPoint(camera, currentPart, character, false)
-                        end
-                        if point then
-                            local alpha = 1 - math.exp(-settings.AimSmooth * math.min(dt, 0.1))
-                            local desired = CFrame.lookAt(camera.CFrame.Position, point, camera.CFrame.UpVector)
-                            camera.CFrame = camera.CFrame:Lerp(desired, alpha)
-                        end
-                    end
+                else
+                    setTarget(nil, nil)
                 end
 
-                if settings.SilentAim and settings.AutoFire and not pendingAcquire
-                    and currentTarget and now >= autoFireDue then
-                    if beginClick(true, currentTarget, currentPart) then
-                        autoFireDue = now + settings.FireInterval / 1000
+                updateFilter(camera)
+                local source = resolveAutoSource()
+                local forceMotion = source == "Motion"
+                local motionPlayer, motionPart, motionPoint = motionAim:Update(
+                    dt, camera, rayParams, false, forceMotion, now
+                )
+                local motionCharacter = motionPlayer and GameAdapter:GetCharacter(motionPlayer) or nil
+
+                if not settings.SilentAim then
+                    setTarget(motionPlayer, motionPart)
+                end
+
+                if settings.AutoFire and now >= autoFireDue then
+                    if source == "Silent" and settings.SilentAim and currentTarget
+                        and currentPart and not pendingAcquire then
+                        if beginClick(true, currentTarget, currentPart) then
+                            autoFireDue = now + settings.FireInterval / 1000
+                        end
+                    elseif source == "Motion" and motionPlayer and motionCharacter
+                        and motionPart and motionPoint and motionAim:IsAligned(camera) then
+                        if beginMotionAuto(camera, motionPlayer, motionCharacter, motionPart, motionPoint, now) then
+                            autoFireDue = now + settings.FireInterval / 1000
+                        end
                     end
                 end
             end

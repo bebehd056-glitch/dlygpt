@@ -212,6 +212,17 @@ local shutdown = new("BindableEvent", {Name = "Shutdown"}, gui)
 local overlay = new("Frame", {Name = "Overlay", BackgroundTransparency = 1,
     Size = UDim2.fromScale(1, 1), ClipsDescendants = true, ZIndex = 1}, gui)
 
+local telemetry = importModule("visuals/telemetry.lua")({
+    Settings = settings,
+    Overlay = overlay,
+    Theme = theme,
+    TweenService = TweenService,
+})
+local thirdPerson = importModule("camera/thirdperson.lua")({
+    LocalPlayer = localPlayer,
+    Settings = settings,
+})
+
 -- One line owns a sharp core and a faint, wider halo. No scene-wide post processing.
 local function newLine(parent)
     local halo = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5),
@@ -914,41 +925,40 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 local rayBudget = 0
 local function headSamplePoints(head)
-    local sx = math.max(0.08, head.Size.X * 0.42)
-    local sy = math.max(0.08, head.Size.Y * 0.42)
-    local sz = math.max(0.08, head.Size.Z * 0.34)
-    local cf = head.CFrame
-    return {
-        head.Position,
-        cf:PointToWorldSpace(Vector3.new(0, sy, 0)),
-        cf:PointToWorldSpace(Vector3.new(-sx, 0, 0)),
-        cf:PointToWorldSpace(Vector3.new(sx, 0, 0)),
-        cf:PointToWorldSpace(Vector3.new(0, 0, -sz)),
-        cf:PointToWorldSpace(Vector3.new(0, 0, sz)),
-    }
+    return Visibility:SamplePart(head)
 end
 local function updateVisibility(data, camera, now)
     if not settings.VisibilityColors and not settings.OnlyVisible and not settings.HeadMarker then return end
     if now < data.RayDue or rayBudget < 1 then return end
+
     local start = camera.CFrame.Position
-    local function clearPoint(point)
-        if rayBudget < 1 then return false end
-        rayBudget = rayBudget - 1
-        local result = workspace:Raycast(start, point - start, rayParams)
-        return not result or result.Instance:IsDescendantOf(data.Character)
-    end
+    local scanParts = {
+        data.Head,
+        data.Parts.UpperTorso or data.Parts.Torso,
+        data.Parts.LowerTorso,
+        data.Parts["Left Arm"] or data.Parts.LeftUpperArm,
+        data.Parts["Right Arm"] or data.Parts.RightUpperArm,
+        data.Parts["Left Leg"] or data.Parts.LeftUpperLeg,
+        data.Parts["Right Leg"] or data.Parts.RightUpperLeg,
+    }
     local visible = false
-    for _, point in ipairs(headSamplePoints(data.Head)) do
-        if clearPoint(point) then
-            visible = true
-            break
+    for _, part in ipairs(scanParts) do
+        if part and part.Parent then
+            for _, point in ipairs(Visibility:SamplePart(part)) do
+                if rayBudget < 1 then break end
+                rayBudget = rayBudget - 1
+                if Visibility:Clear(start, point, data.Character, rayParams) then
+                    visible = true
+                    break
+                end
+            end
         end
+        if visible or rayBudget < 1 then break end
     end
-    if not visible and rayBudget > 0 then
-        visible = clearPoint(data.Root.Position)
-    end
+
     data.VisibleToCamera = visible
-    data.RayDue = now + 0.10 + (math.abs(data.Player.UserId) % 5) * 0.006
+    data.RayDue = now + (settings.VisibilitySampling == "Dense" and 0.045 or 0.07)
+        + (math.abs(data.Player.UserId) % 5) * 0.004
 end
 
 -- Clip world segments at the camera near plane before projecting them.
@@ -1191,8 +1201,7 @@ local function startCombat()
     local syntheticInput, consumedClick = false, false
     local bindFireAction
     local inputRebindToken = 0
-    local pressed, antiState
-    local spinAngle = 0
+    local pressed
     local serviceConnections, watchers = {}, {}
     local candidateDue, autoFireDue = 0, 0
     local currentTarget, currentPart, focused = nil, nil, true
@@ -1257,87 +1266,43 @@ local function startCombat()
     end
     local function enemyAlive(player, expected)
         if player == localPlayer or (settings.AimTeamCheck and isTeammate(player)) then return false end
-        local character = liveCharacter(player, expected)
+        local character = Alive:IsAlive(player, expected)
         return character ~= nil and not character:FindFirstChildOfClass("ForceField")
     end
-    local function clear(origin, point, character)
-        local delta = point - origin
-        if delta.Magnitude < 0.01 then return true end
-        local result = workspace:Raycast(origin, delta, rayParams)
-        return not result or result.Instance:IsDescendantOf(character)
-    end
-    local function visiblePointOnPart(origin, part, character, forceWalls)
-        if not part or not part:IsA("BasePart") or not part:IsDescendantOf(character) then return nil end
-        local _, head = ownCharacter()
-        if not head then return nil end
-        local samples = part.Name == "Head" and headSamplePoints(part) or {part.Position}
-        for _, point in ipairs(samples) do
-            if not (forceWalls or settings.AimWallCheck)
-                or (clear(origin, point, character) and clear(head.Position, point, character)) then
-                return point
-            end
-        end
-        return nil
-    end
-    local function points(character)
-        local result = {}
-        local head = character:FindFirstChild("Head")
-        local body = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-            or character:FindFirstChild("HumanoidRootPart")
-        if settings.AimPart ~= "Корпус" and head and head:IsA("BasePart") then result[#result + 1] = head end
-        if settings.AimPart ~= "Голова" and body and body:IsA("BasePart") then result[#result + 1] = body end
-        return result
-    end
-    local function withinFOV(forward, delta)
-        if delta.Magnitude < 0.05 then return false end
-        return settings.AimFOV >= 359.5
-            or forward:Dot(delta.Unit) >= math.cos(math.rad(settings.AimFOV * 0.5))
-    end
+
+    local targeting = importModule("combat/targeting.lua")({
+        Players = Players,
+        LocalPlayer = localPlayer,
+        Settings = settings,
+        Alive = Alive,
+        Visibility = Visibility,
+        IsTeammate = isTeammate,
+        GetLocalHead = function()
+            local _, head = ownCharacter()
+            return head
+        end,
+    })
+    local antiAim = importModule("combat/antiaim.lua")({
+        Settings = settings,
+        GetCharacter = function()
+            local character, _, humanoid = ownCharacter()
+            return character, humanoid
+        end,
+    })
+
     local function validPoint(camera, part, character, forceWalls)
-        local delta = part.Position - camera.CFrame.Position
-        if delta.Magnitude > settings.AimDistance or not withinFOV(camera.CFrame.LookVector, delta) then return nil end
-        local point = visiblePointOnPart(camera.CFrame.Position, part, character, forceWalls)
-        if point and withinFOV(camera.CFrame.LookVector, point - camera.CFrame.Position)
-            and (point - camera.CFrame.Position).Magnitude <= settings.AimDistance then return point end
-        return nil
+        local player = character and Players:GetPlayerFromCharacter(character)
+        if not player then return nil end
+        return targeting:ValidatePoint(camera, rayParams, player, character, part, forceWalls)
     end
+
     local function findTarget(camera, forceWalls)
         if blocked() then return nil end
         updateFilter(camera)
-        local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
-        local candidates = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            if enemyAlive(player) then
-                local character, humanoid = liveCharacter(player)
-                local options, score = {}, math.huge
-                for _, part in ipairs(points(character)) do
-                    local delta = part.Position - origin
-                    local distance = delta.Magnitude
-                    if distance > 0.05 and distance <= settings.AimDistance and withinFOV(forward, delta) then
-                        local value = 1 - math.clamp(forward:Dot(delta.Unit), -1, 1)
-                        if settings.TargetPriority == "Ближайший" then value = distance / settings.AimDistance end
-                        if settings.TargetPriority == "Мало HP" then value = humanoid.Health end
-                        if player == currentTarget then value = value * (1 - settings.TargetStickiness / 100) end
-                        score = math.min(score, value)
-                        options[#options + 1] = part
-                    end
-                end
-                if #options > 0 then candidates[#candidates + 1] = {Player=player, Character=character, Points=options, Score=score} end
-            end
-        end
-        table.sort(candidates, function(a, b)
-            if a.Score == b.Score then return a.Player.UserId < b.Player.UserId end
-            return a.Score < b.Score
-        end)
-        -- Do not discard visible targets merely because six closer candidates are behind walls.
-        for _, candidate in ipairs(candidates) do
-            for _, part in ipairs(candidate.Points) do
-                local point = validPoint(camera, part, candidate.Character, forceWalls)
-                if point then return candidate.Player, part, point end
-            end
-        end
-        return nil
+        local player, _, part, point = targeting:Find(camera, rayParams, currentTarget, forceWalls)
+        return player, part, point
     end
+
     local function setTarget(player, part)
         currentTarget, currentPart = player, part
         controller.Target = player
@@ -1435,35 +1400,13 @@ local function startCombat()
         end
     end)
     local function restoreAnti()
-        local previous = antiState
-        antiState = nil
-        if not previous then return end
-        if previous.Humanoid.Parent then previous.Humanoid.AutoRotate = previous.AutoRotate end
-        if previous.Root.Parent then previous.Root.CFrame = CFrame.new(previous.Root.Position) * previous.Rotation end
+        antiAim:Restore()
     end
     local function updateAnti(dt, camera, now)
-        local character, _, humanoid = ownCharacter()
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-        if not settings.AntiAim or blocked() or shot or pendingAcquire
+        local busy = shot or pendingAcquire
             or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
             or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-            or not root or not root:IsA("BasePart") or root.Anchored or humanoid.Sit
-            or humanoid.PlatformStand then restoreAnti() return end
-        if antiState and antiState.Root ~= root then restoreAnti() end
-        if not antiState then
-            antiState = {Humanoid=humanoid, Root=root, AutoRotate=humanoid.AutoRotate, Rotation=root.CFrame.Rotation}
-        end
-        humanoid.AutoRotate = false
-        local look = camera.CFrame.LookVector
-        local yaw = math.atan2(-look.X, -look.Z) + math.rad(settings.AntiYaw)
-        if settings.AntiMode == "Jitter" then
-            local sign = math.floor(now / (settings.AntiPeriod / 1000)) % 2 == 0 and 1 or -1
-            yaw = yaw + math.rad(settings.AntiJitter) * sign
-        elseif settings.AntiMode == "Spin" then
-            spinAngle = (spinAngle + math.rad(settings.AntiSpeed) * dt) % (math.pi * 2)
-            yaw = yaw + spinAngle
-        end
-        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, yaw, 0)
+        antiAim:Update(dt, camera, now, blocked() or busy)
     end
     local function beginClick(auto, player, part)
         if pendingAcquire or shot or blocked() or not settings.SilentAim then return false end
@@ -1928,7 +1871,7 @@ local function render(dt)
     local ignore = {camera}
     if localCharacter then ignore[#ignore + 1] = localCharacter end
     rayParams.FilterDescendantsInstances = ignore
-    rayBudget = 56
+    rayBudget = settings.VisibilitySampling == "Dense" and 160 or (settings.VisibilitySampling == "Balanced" and 96 or 56)
     if now >= metadataDue then updateMetadata(camera, origin, now) end
     radar.Visible = settings.Enabled and settings.Radar
     local count = 0

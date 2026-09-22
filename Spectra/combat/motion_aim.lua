@@ -9,7 +9,7 @@ return function(ctx)
     local UserInputService = ctx.UserInputService or game:GetService("UserInputService")
 
     local currentTarget, currentCharacter, currentPart
-    local point, filteredPoint, randomGoal
+    local point, filteredPoint, randomLocalPoint
     local randomDue = 0
     local angularVelocity = 0
 
@@ -30,11 +30,13 @@ return function(ctx)
     local function chooseRandomGoal(camera, part, character, rayParams, basePoint, now)
         local amount = math.clamp((settings.MotionRandomization or 0) / 100, 0, 1)
         if amount <= 0 then
-            randomGoal = nil
+            randomLocalPoint = nil
             return basePoint
         end
 
-        if randomGoal and now < randomDue then return randomGoal end
+        if randomLocalPoint and now < randomDue then
+            return part.CFrame:PointToWorldSpace(randomLocalPoint)
+        end
 
         local candidates = visibility:SamplePart(part)
         local visible = {}
@@ -45,9 +47,10 @@ return function(ctx)
         end
 
         local chosen = #visible > 0 and visible[math.random(1, #visible)] or basePoint
-        randomGoal = basePoint:Lerp(chosen, amount)
+        local worldGoal = basePoint:Lerp(chosen, amount)
+        randomLocalPoint = part.CFrame:PointToObjectSpace(worldGoal)
         randomDue = now + math.max(settings.MotionRandomRefreshMS or 180, 40) / 1000
-        return randomGoal
+        return part.CFrame:PointToWorldSpace(randomLocalPoint)
     end
 
     local function smoothPoint(rawPoint, dt)
@@ -111,12 +114,17 @@ return function(ctx)
 
         local rotation = CFrame.fromAxisAngle(axis, step)
         local nextDirection = rotation:VectorToWorldSpace(currentDirection).Unit
-        camera.CFrame = CFrame.lookAt(origin, origin + nextDirection, camera.CFrame.UpVector)
+        local up = camera.CFrame.UpVector
+        if math.abs(nextDirection:Dot(up)) > 0.985 then
+            up = Vector3.yAxis
+            if math.abs(nextDirection:Dot(up)) > 0.985 then up = Vector3.xAxis end
+        end
+        camera.CFrame = CFrame.lookAt(origin, origin + nextDirection, up)
     end
 
     function api:Clear()
         currentTarget, currentCharacter, currentPart = nil, nil, nil
-        point, filteredPoint, randomGoal, randomDue = nil, nil, nil, 0
+        point, filteredPoint, randomLocalPoint, randomDue = nil, nil, nil, 0
         angularVelocity = 0
     end
 
@@ -154,7 +162,7 @@ return function(ctx)
             end
 
             if player ~= currentTarget or part ~= currentPart then
-                randomGoal, randomDue = nil, 0
+                randomLocalPoint, randomDue = nil, 0
                 filteredPoint = found
                 angularVelocity = math.min(angularVelocity, math.rad((settings.MotionAimSpeed or 240) * 0.35))
             end

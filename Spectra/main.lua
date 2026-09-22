@@ -81,6 +81,7 @@ local defaults = {
     AimRayOrigin = "Camera", VisibilitySampling = "Dense",
     AliveHealthCheck = true, AliveStateCheck = true, AliveAncestryCheck = true,
     AliveRootCheck = true, AliveDeadTags = true,
+    AliveRagdollCheck = true, AliveRagdollConfirmMS = 220,
     ThirdPerson = false, ThirdPersonDistance = 8, ThirdPersonShoulder = 0,
     BulletTracers = true, HitLogs = true, HitMarker = true, HitFlash = true,
     HitLogDuration = 2.5, TracerDuration = 0.35,
@@ -117,6 +118,7 @@ local settingRanges = {
     BloomIntensity={0,4}, BloomSize={0,56}, BloomThreshold={0,2}, BlurSize={0,24},
     SunRaysIntensity={0,1}, SunRaysSpread={0,1},
     DOFFarIntensity={0,1}, DOFNearIntensity={0,1}, DOFFocusDistance={1,500}, DOFInFocusRadius={0,250},
+    AliveRagdollConfirmMS={80,600},
 }
 local settingChoices = {
     BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
@@ -852,6 +854,7 @@ local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,Aim
     FireMethod=true,AimWallCheck=true,AimRayOrigin=true,VisibilitySampling=true,
     AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true,
     AliveHealthCheck=true,AliveStateCheck=true,AliveAncestryCheck=true,AliveRootCheck=true,AliveDeadTags=true,
+    AliveRagdollCheck=true,AliveRagdollConfirmMS=true,
     ThirdPerson=true,ThirdPersonDistance=true,ThirdPersonShoulder=true,
     BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true,
     AutoFireSource=true,MotionAimSpeed=true,MotionAimPart=true,MotionRandomization=true,
@@ -875,6 +878,8 @@ toggle("CONFIG","Humanoid state","AliveStateCheck")
 toggle("CONFIG","Workspace ancestry","AliveAncestryCheck")
 toggle("CONFIG","Head + root exist","AliveRootCheck")
 toggle("CONFIG","Dead/Alive attributes","AliveDeadTags")
+toggle("CONFIG","Ragdoll / corpse posture","AliveRagdollCheck","Мягкая проверка: state + PlatformStand + наклон тела + высота головы")
+slider("CONFIG","Ragdoll confirm","AliveRagdollConfirmMS",80,600,20," ms")
 section("CONFIG","Visual presets",2)
 for _,profile in ipairs(profiles) do
     local preset=profile

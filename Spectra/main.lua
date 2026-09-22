@@ -1588,11 +1588,12 @@ local function startCombat()
         if shot.NoFlick then
             local motionPlayer, motionCharacter, motionPart, motionPoint = motionAim:GetTarget()
             if motionPlayer == shot.Player and motionCharacter == shot.Character
-                and motionPart == shot.Part and motionPoint then
+                and motionPart == shot.Part and motionPoint
+                and (motionPoint - shot.Part.Position).Magnitude <= shot.Part.Size.Magnitude + 1 then
                 point = motionPoint
             end
             shot.Point = point
-            if not motionAim:IsAligned(camera) then return end
+            if not motionAim:IsAligned(camera, point) then return end
         else
             shot.Point = point
         end

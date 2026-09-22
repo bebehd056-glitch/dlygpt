@@ -1598,7 +1598,7 @@ local function startCombat()
 
     local function markDead(player, character)
         if not character then return end
-        deadCharacters[character] = true
+        Alive:MarkDead(character)
         local data = visuals[player]
         if data and data.Character == character then
             data.Eligible = false
@@ -1628,6 +1628,7 @@ local function startCombat()
         local function attach(character)
             clearLife()
             if record.Character then restoreBody(record.Character) end
+            Alive:Clear(character)
             record.Character, record.Shattered = character, false
             metadataDue = 0
             local function onDead()
@@ -1730,28 +1731,55 @@ local function startCombat()
             if shot then
                 updateShot(camera, now)
             else
-                if aiming and now >= candidateDue then
-                    local player, part = findTarget(camera, settings.AutoFire and settings.SilentAim)
-                    setTarget(player, part)
-                    candidateDue = now + TARGET_REFRESH
-                elseif not aiming then
+                local point
+                if not aiming then
                     setTarget(nil, nil)
-                end
-                if currentTarget then
-                    updateFilter(camera)
-                    local character = currentTarget.Character
-                    local point = enemyAlive(currentTarget) and currentPart and character
-                        and currentPart:IsDescendantOf(character)
-                        and validPoint(camera, currentPart, character, settings.AutoFire and settings.SilentAim)
-                    if not point then
-                        setTarget(nil, nil)
-                        candidateDue = 0
-                    elseif settings.AimEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-                        local alpha = 1 - math.exp(-settings.AimSmooth * math.min(dt, 0.1))
-                        local desired = CFrame.lookAt(camera.CFrame.Position, point, camera.CFrame.UpVector)
-                        camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+                else
+                    -- Keep a valid target locked. Re-scan only after it becomes invalid,
+                    -- preventing target swaps every refresh tick and the resulting crosshair jerk.
+                    if currentTarget and currentPart then
+                        updateFilter(camera)
+                        local character = currentTarget.Character
+                        point = enemyAlive(currentTarget) and character
+                            and currentPart:IsDescendantOf(character)
+                            and validPoint(camera, currentPart, character,
+                                settings.AutoFire and settings.SilentAim)
+                        if not point then
+                            setTarget(nil, nil)
+                            candidateDue = 0
+                        end
+                    end
+
+                    if not currentTarget and now >= candidateDue then
+                        local player, part = findTarget(camera, settings.AutoFire and settings.SilentAim)
+                        setTarget(player, part)
+                        candidateDue = now + TARGET_REFRESH
+                        if player and part then
+                            local character = player.Character
+                            point = character and validPoint(camera, part, character,
+                                settings.AutoFire and settings.SilentAim)
+                            if not point then
+                                setTarget(nil, nil)
+                                candidateDue = 0
+                            end
+                        end
+                    end
+
+                    if currentTarget and settings.AimEnabled
+                        and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                        if not point then
+                            local character = currentTarget.Character
+                            point = character and currentPart
+                                and validPoint(camera, currentPart, character, false)
+                        end
+                        if point then
+                            local alpha = 1 - math.exp(-settings.AimSmooth * math.min(dt, 0.1))
+                            local desired = CFrame.lookAt(camera.CFrame.Position, point, camera.CFrame.UpVector)
+                            camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+                        end
                     end
                 end
+
                 if settings.SilentAim and settings.AutoFire and not pendingAcquire
                     and currentTarget and now >= autoFireDue then
                     if beginClick(true, currentTarget, currentPart) then

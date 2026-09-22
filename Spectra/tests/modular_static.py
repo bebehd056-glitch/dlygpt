@@ -10,7 +10,8 @@ main = (ROOT / "main.lua").read_text(encoding="utf-8")
 loader = (ROOT / "loader.lua").read_text(encoding="utf-8")
 
 required_modules = {
-    "core/game_adapter.lua": ["function api:GetCharacter", "function api:SetCustom", "GetAimParts"],
+    "core/game_adapter.lua": ["function api:GetCharacter", "function api:SetCustom", "GetAimParts",
+                              "GetCharacterAddedSignal", "GetCharacterRemovingSignal"],
     "core/alive.lua": ["function api:IsAlive", "AliveDeadTags", "Adapter"],
     "core/visibility.lua": ["function api:FindVisiblePoint", "VisibilitySampling"],
     "combat/targeting.lua": ["function api:Find", "partMode", "adapter:GetAimParts"],

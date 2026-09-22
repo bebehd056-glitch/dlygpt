@@ -12,11 +12,12 @@ loader = (ROOT / "loader.lua").read_text(encoding="utf-8")
 required_modules = {
     "core/game_adapter.lua": ["function api:GetCharacter", "function api:SetCustom", "GetAimParts",
                               "GetCharacterAddedSignal", "GetCharacterRemovingSignal"],
-    "core/alive.lua": ["function api:IsAlive", "AliveDeadTags", "AliveRagdollCheck",
-                       "postureLooksDead", "record.Next = now + 0.12", "signals >= 3"],
+    "core/alive.lua": ["function api:IsAlive", "AliveDeadTags", "postureLooksDead",
+                       "passiveCorpse", "record.Next = now + 0.10", "IsSoftCorpse"],
     "core/visibility.lua": ["function api:FindVisiblePoint", "VisibilitySampling"],
     "combat/targeting.lua": ["function api:Find", "partMode", "adapter:GetAimParts"],
-    "combat/motion_aim.lua": ["MotionAimSpeed", "MotionRandomization", "function api:IsAligned"],
+    "combat/motion_aim.lua": ["MotionAimSpeed", "MotionAimAcceleration", "MotionAimTracking",
+                              "brakingSpeed", "smoothPoint", "function api:IsAligned"],
     "combat/antiaim.lua": ["function api:Update", "AutoRotate"],
     "camera/thirdperson.lua": ["function api:Update", "ThirdPersonDistance"],
     "visuals/chams.lua": ["SpectraChams", "ChamsThroughWalls", "ChamsColorMode"],
@@ -47,6 +48,8 @@ check('AimRayOrigin = "Camera"' in main, "camera ray origin must be default")
 check('VisibilitySampling = "Dense"' in main, "dense multipoint must be default")
 check('AutoFireSource = "Auto"' in main, "automatic fire routing default missing")
 check('MotionAimSpeed = 240' in main, "motion aim speed default missing")
+check('MotionAimAcceleration = 1500' in main, "motion aim acceleration default missing")
+check('MotionAimTracking = 11' in main, "motion aim tracking default missing")
 check('MotionAimPart = "Visible"' in main, "motion aim body-selection default missing")
 check('MotionRandomization = 18' in main, "motion randomization default missing")
 check('MotionFireTolerance = 1.25' in main, "motion auto-fire tolerance missing")
@@ -63,7 +66,8 @@ check('AliveHealthCheck = true' in main, "alive health toggle missing")
 check('AliveStateCheck = true' in main, "alive state toggle missing")
 check('AliveDeadTags = true' in main, "dead-tag toggle missing")
 check('AliveRagdollCheck = true' in main, "ragdoll posture toggle missing")
-check('AliveRagdollConfirmMS = 220' in main, "ragdoll confirmation default missing")
+check('AliveRagdollConfirmMS = 260' in main, "ragdoll confirmation default missing")
+check('AliveRagdollReleaseMS = 420' in main, "corpse release hysteresis default missing")
 check('ThirdPerson = false' in main, "third-person setting missing")
 check('BulletTracers = true' in main and 'HitLogs = true' in main, "telemetry defaults missing")
 

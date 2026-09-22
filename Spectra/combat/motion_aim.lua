@@ -55,8 +55,8 @@ return function(ctx)
         return currentTarget, currentCharacter, currentPart, point
     end
 
-    function api:IsAligned(camera)
-        return angularError(camera, point) <= (settings.MotionFireTolerance or 1.25)
+    function api:IsAligned(camera, targetPoint)
+        return angularError(camera, targetPoint or point) <= (settings.MotionFireTolerance or 1.25)
     end
 
     function api:Update(dt, camera, rayParams, blocked, forceActive, now)
@@ -66,16 +66,17 @@ return function(ctx)
             return nil
         end
 
+        local requireVisibility = forceActive or settings.AimWallCheck
         local validated
         if currentTarget and currentCharacter and currentPart then
             validated = targeting:ValidatePoint(
-                camera, rayParams, currentTarget, currentCharacter, currentPart, true
+                camera, rayParams, currentTarget, currentCharacter, currentPart, requireVisibility
             )
         end
 
         if not validated then
             local player, character, part, found = targeting:Find(
-                camera, rayParams, currentTarget, true, settings.MotionAimPart
+                camera, rayParams, currentTarget, requireVisibility, settings.MotionAimPart
             )
             if not player then
                 self:Clear()

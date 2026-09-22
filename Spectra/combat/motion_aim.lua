@@ -1,5 +1,6 @@
--- SPECTRA motion aim.
--- Moves the camera at a bounded angular speed instead of snapping it.
+-- SPECTRA motion aim v2.
+-- Camera steering uses a smoothed target point plus acceleration/braking-limited angular motion.
+-- No server/place/weapon binding is required.
 
 return function(ctx)
     local settings = assert(ctx.Settings, "MotionAim: Settings missing")
@@ -8,8 +9,9 @@ return function(ctx)
     local UserInputService = ctx.UserInputService or game:GetService("UserInputService")
 
     local currentTarget, currentCharacter, currentPart
-    local point, randomPoint
+    local point, filteredPoint, randomGoal
     local randomDue = 0
+    local angularVelocity = 0
 
     local api = {}
 
@@ -20,10 +22,19 @@ return function(ctx)
         return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
     end
 
-    local function randomizedPoint(camera, part, character, rayParams, basePoint, now)
+    local function moveTowards(current, target, maximumDelta)
+        if current < target then return math.min(current + maximumDelta, target) end
+        return math.max(current - maximumDelta, target)
+    end
+
+    local function chooseRandomGoal(camera, part, character, rayParams, basePoint, now)
         local amount = math.clamp((settings.MotionRandomization or 0) / 100, 0, 1)
-        if amount <= 0 then return basePoint end
-        if randomPoint and now < randomDue then return randomPoint end
+        if amount <= 0 then
+            randomGoal = nil
+            return basePoint
+        end
+
+        if randomGoal and now < randomDue then return randomGoal end
 
         local candidates = visibility:SamplePart(part)
         local visible = {}
@@ -32,10 +43,25 @@ return function(ctx)
                 visible[#visible + 1] = sample
             end
         end
+
         local chosen = #visible > 0 and visible[math.random(1, #visible)] or basePoint
-        randomPoint = basePoint:Lerp(chosen, amount)
-        randomDue = now + math.max(settings.MotionRandomRefreshMS or 140, 20) / 1000
-        return randomPoint
+        randomGoal = basePoint:Lerp(chosen, amount)
+        randomDue = now + math.max(settings.MotionRandomRefreshMS or 180, 40) / 1000
+        return randomGoal
+    end
+
+    local function smoothPoint(rawPoint, dt)
+        if not filteredPoint then
+            filteredPoint = rawPoint
+            return filteredPoint
+        end
+
+        -- Exponential smoothing is framerate-independent and prevents the random point
+        -- or a moving limb from creating a one-frame camera jerk.
+        local response = math.clamp(settings.MotionAimTracking or 11, 2, 30)
+        local alpha = 1 - math.exp(-response * math.min(dt, 0.05))
+        filteredPoint = filteredPoint:Lerp(rawPoint, alpha)
+        return filteredPoint
     end
 
     local function angularError(camera, targetPoint)
@@ -46,9 +72,52 @@ return function(ctx)
         return math.deg(math.acos(dot))
     end
 
+    local function steer(camera, targetPoint, dt)
+        local origin = camera.CFrame.Position
+        local delta = targetPoint - origin
+        if delta.Magnitude < 0.001 then
+            angularVelocity = 0
+            return
+        end
+
+        local currentDirection = camera.CFrame.LookVector
+        local desiredDirection = delta.Unit
+        local dot = math.clamp(currentDirection:Dot(desiredDirection), -1, 1)
+        local angle = math.acos(dot)
+        if angle < 0.00005 then
+            angularVelocity = 0
+            return
+        end
+
+        local maxSpeed = math.rad(math.max(settings.MotionAimSpeed or 240, 1))
+        local acceleration = math.rad(math.max(settings.MotionAimAcceleration or 1500, 30))
+        local frame = math.min(dt, 0.05)
+
+        -- sqrt(2*a*d) is the maximum speed that can still brake to zero at the target.
+        -- This removes the sharp "hit target then stop" feel from the old implementation.
+        local brakingSpeed = math.sqrt(math.max(0, 2 * acceleration * angle))
+        local desiredSpeed = math.min(maxSpeed, brakingSpeed)
+        angularVelocity = moveTowards(angularVelocity, desiredSpeed, acceleration * frame)
+
+        local step = math.min(angle, angularVelocity * frame)
+        if step <= 0 then return end
+
+        local axis = currentDirection:Cross(desiredDirection)
+        if axis.Magnitude < 0.00001 then
+            axis = camera.CFrame.UpVector
+        else
+            axis = axis.Unit
+        end
+
+        local rotation = CFrame.fromAxisAngle(axis, step)
+        local nextDirection = rotation:VectorToWorldSpace(currentDirection).Unit
+        camera.CFrame = CFrame.lookAt(origin, origin + nextDirection, camera.CFrame.UpVector)
+    end
+
     function api:Clear()
         currentTarget, currentCharacter, currentPart = nil, nil, nil
-        point, randomPoint, randomDue = nil, nil, 0
+        point, filteredPoint, randomGoal, randomDue = nil, nil, nil, 0
+        angularVelocity = 0
     end
 
     function api:GetTarget()
@@ -68,6 +137,7 @@ return function(ctx)
 
         local requireVisibility = forceActive or settings.AimWallCheck
         local validated
+
         if currentTarget and currentCharacter and currentPart then
             validated = targeting:ValidatePoint(
                 camera, rayParams, currentTarget, currentCharacter, currentPart, requireVisibility
@@ -82,23 +152,20 @@ return function(ctx)
                 self:Clear()
                 return nil
             end
+
             if player ~= currentTarget or part ~= currentPart then
-                randomPoint, randomDue = nil, 0
+                randomGoal, randomDue = nil, 0
+                filteredPoint = found
+                angularVelocity = math.min(angularVelocity, math.rad((settings.MotionAimSpeed or 240) * 0.35))
             end
+
             currentTarget, currentCharacter, currentPart = player, character, part
             validated = found
         end
 
-        point = randomizedPoint(camera, currentPart, currentCharacter, rayParams, validated, now)
-        local delta = point - camera.CFrame.Position
-        if delta.Magnitude < 0.001 then return currentTarget, currentPart, point end
-
-        local desired = CFrame.lookAt(camera.CFrame.Position, point, camera.CFrame.UpVector)
-        local dot = math.clamp(camera.CFrame.LookVector:Dot(delta.Unit), -1, 1)
-        local angle = math.acos(dot)
-        local maxStep = math.rad(math.max(settings.MotionAimSpeed or 240, 1)) * math.min(dt, 0.1)
-        local alpha = angle < 0.0001 and 1 or math.clamp(maxStep / angle, 0, 1)
-        camera.CFrame = camera.CFrame:Lerp(desired, alpha)
+        local rawPoint = chooseRandomGoal(camera, currentPart, currentCharacter, rayParams, validated, now)
+        point = smoothPoint(rawPoint, dt)
+        steer(camera, point, dt)
 
         return currentTarget, currentPart, point
     end

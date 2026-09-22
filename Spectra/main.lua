@@ -1,5 +1,5 @@
 --[[
-SPECTRA v8 — classic menu / portable client aim / input adapters.
+SPECTRA v9 — modular targeting / multipoint visibility / classic menu.
 Insert / RightShift: menu. End: unload. Regular aim: hold RMB.
 Client-only. Weapon activation depends on the weapon's input implementation.
 Silent keeps the camera aimed until input release, then restores the view.
@@ -273,7 +273,7 @@ end
 local header = new("Frame", {Name="DragHandle", BackgroundTransparency=1, Active=true,
     Position=UDim2.fromOffset(9,10), Size=UDim2.fromOffset(MENU_W-44,25)}, menu)
 local brand = label(header, BRAND_NAME, 9, 1, 210, 22, 13, theme.Text, Enum.Font.ArialBold)
-label(header, "[ classic / v8 ]", 214, 3, 130, 18, 10, theme.Muted)
+label(header, "[ modular / v9 ]", 214, 3, 130, 18, 10, theme.Muted)
 local master = button(header, "", MENU_W-164, 3, 104, 18)
 master.BackgroundTransparency=1
 master.Modal=true
@@ -1935,7 +1935,7 @@ RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 50, 
 end)
 
 -- Portable creator API: no PlaceId, RemoteEvent names, weapon paths, or HTTP calls in main.lua.
-local api = {Version="8.0.0"}
+local api = {Version="9.0.0"}
 function api:Set(key,value)
     if not alive then return false,"Spectra is unloaded" end
     return setSetting(key,value)

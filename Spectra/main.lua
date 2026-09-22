@@ -2099,7 +2099,7 @@ RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 50, 
     end
 end)
 
--- Portable creator API: no PlaceId, RemoteEvent names, weapon paths, or HTTP calls in main.lua.
+-- Portable creator API: no PlaceId, RemoteEvent names or weapon/server paths.
 local api = {Version="10.0.0"}
 function api:Set(key,value)
     if not alive then return false,"Spectra is unloaded" end

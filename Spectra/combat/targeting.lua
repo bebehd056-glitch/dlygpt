@@ -42,9 +42,11 @@ return function(ctx)
         if settings.TargetPriority == "Ближайший" then
             value = distance / math.max(settings.AimDistance, 1)
         elseif settings.TargetPriority == "Мало HP" then
-            local health, maximum = adapter and adapter:GetHealth(character)
-                or humanoid.Health, humanoid.MaxHealth
-            value = (health or humanoid.Health) / math.max(maximum or humanoid.MaxHealth, 1)
+            local health, maximum
+            if adapter then health, maximum = adapter:GetHealth(character) end
+            health = health or humanoid.Health
+            maximum = maximum or humanoid.MaxHealth
+            value = health / math.max(maximum, 1)
         else
             value = 1 - math.clamp(forward:Dot(delta / distance), -1, 1)
         end

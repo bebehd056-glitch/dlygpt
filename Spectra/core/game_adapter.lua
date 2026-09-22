@@ -113,6 +113,14 @@ return function(ctx)
         return humanoid and humanoid.Health or nil, humanoid and humanoid.MaxHealth or nil
     end
 
+    function api:SetCustom(value)
+        if value ~= nil and type(value) ~= "table" then
+            return false, "GameAdapter must be a table or nil"
+        end
+        custom = value or {}
+        return true
+    end
+
     function api:GetCustom()
         return custom
     end

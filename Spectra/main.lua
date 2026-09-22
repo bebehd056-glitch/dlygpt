@@ -303,146 +303,184 @@ local function drawLine(line, a, b, color, thickness, glow)
     end
 end
 
--- Classic gamesense-inspired geometry; all controls/icons are drawn locally.
-local MENU_W, MENU_H = 700, 590
-local menu = new("CanvasGroup", {Name = "Menu", Size = UDim2.fromOffset(MENU_W, MENU_H),
-    Position = UDim2.fromOffset(28, 100), BackgroundColor3 = Color3.fromRGB(10, 10, 10),
-    BorderSizePixel = 1, BorderColor3 = Color3.new(0, 0, 0), GroupTransparency = 0, ZIndex = 20}, gui)
+-- Compact classic menu geometry. Kept asset-free and reskinnable.
+local layout = skeetStyle.Layout or {}
+local MENU_W, MENU_H = layout.Width or 820, layout.Height or 610
+local SIDE_W = layout.SidebarWidth or 132
+local HEADER_H = layout.HeaderHeight or 34
+local FOOTER_H = layout.FooterHeight or 24
+
+local menu = new("CanvasGroup", {
+    Name = "Menu",
+    Size = UDim2.fromOffset(MENU_W, MENU_H),
+    Position = UDim2.fromOffset(30, 82),
+    BackgroundColor3 = Color3.fromRGB(8, 9, 10),
+    BorderSizePixel = 1,
+    BorderColor3 = Color3.fromRGB(1, 1, 1),
+    GroupTransparency = 0,
+    ZIndex = 20,
+}, gui)
 local menuScale = new("UIScale", {Scale = 1}, menu)
+
 local function flatFrame(parent, x, y, w, h, color)
-    return new("Frame", {Position=UDim2.fromOffset(x,y), Size=UDim2.fromOffset(w,h),
-        BackgroundColor3=color, BorderSizePixel=0}, parent)
+    return new("Frame", {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(w, h),
+        BackgroundColor3 = color,
+        BorderSizePixel = 0,
+    }, parent)
 end
-local outer = flatFrame(menu, 1, 1, MENU_W-2, MENU_H-2, Color3.fromRGB(54,54,54))
-local inner = flatFrame(outer, 1, 1, MENU_W-4, MENU_H-4, Color3.fromRGB(20,20,20))
-local surface = flatFrame(inner, 4, 4, MENU_W-12, MENU_H-12, theme.Background)
-stroke(surface, Color3.fromRGB(55,55,55))
-local spectrum = flatFrame(menu, 7, 7, MENU_W-14, 2, Color3.new(1,1,1))
-new("UIGradient", {Color=ColorSequence.new({
-    ColorSequenceKeypoint.new(0,Color3.fromRGB(64,185,225)),
-    ColorSequenceKeypoint.new(0.28,Color3.fromRGB(139,110,207)),
-    ColorSequenceKeypoint.new(0.52,Color3.fromRGB(221,89,147)),
-    ColorSequenceKeypoint.new(0.76,Color3.fromRGB(225,163,86)),
-    ColorSequenceKeypoint.new(1,Color3.fromRGB(176,204,85)),
-})}, spectrum)
--- A sparse woven texture without downloading images or creating thousands of cells.
-for y=39,MENU_H-29,6 do
-    local line=flatFrame(menu,82,y,MENU_W-91,1,Color3.fromRGB(30,30,30))
-    line.BackgroundTransparency=0.58
-end
-local header = new("Frame", {Name="DragHandle", BackgroundTransparency=1, Active=true,
-    Position=UDim2.fromOffset(9,10), Size=UDim2.fromOffset(MENU_W-44,25)}, menu)
-local brand = label(header, BRAND_NAME, 9, 1, 210, 22, 13, theme.Text, Enum.Font.ArialBold)
-label(header, "[ portable / v10 ]", 214, 3, 130, 18, 10, theme.Muted)
-local master = button(header, "", MENU_W-164, 3, 104, 18)
-master.BackgroundTransparency=1
-master.Modal=true
+
+-- layered 1px borders instead of rounded cards / glass
+local rim = flatFrame(menu, 1, 1, MENU_W - 2, MENU_H - 2, Color3.fromRGB(50, 52, 54))
+local shell = flatFrame(rim, 1, 1, MENU_W - 4, MENU_H - 4, Color3.fromRGB(10, 11, 12))
+local surface = flatFrame(shell, 2, 2, MENU_W - 8, MENU_H - 8, theme.Background)
+stroke(surface, theme.Line)
+
+-- restrained top accent
+local topAccent = flatFrame(menu, 5, 5, MENU_W - 10, 2, theme.Accent)
+local accentFade = new("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, theme.Accent),
+        ColorSequenceKeypoint.new(0.55, theme.Accent),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(26, 88, 43)),
+    }),
+}, topAccent)
+
+local header = new("Frame", {
+    Name = "DragHandle",
+    BackgroundTransparency = 1,
+    Active = true,
+    Position = UDim2.fromOffset(10, 9),
+    Size = UDim2.fromOffset(MENU_W - 20, HEADER_H),
+}, menu)
+
+local brand = label(header, string.upper(BRAND_NAME), 10, 4, SIDE_W - 18, 17, 14, theme.Text, Enum.Font.ArialBold)
+brand.TextWrapped = false
+label(header, "v10", SIDE_W - 24, 6, 28, 14, 9, theme.Accent, Enum.Font.ArialBold)
+
+local build = label(menu, "PRIVATE BUILD", 20, 31, SIDE_W - 24, 14, 9, theme.Muted, Enum.Font.Code)
+build.TextTransparency = 0.18
+
+local master = button(header, "", MENU_W - 160, 4, 105, 18)
+master.BackgroundTransparency = 1
+master.Modal = true
+master.TextSize = 10
 local function updateMaster()
-    master.Text=settings.Enabled and "ESP  [ ON ]" or "ESP  [ OFF ]"
-    master.TextColor3=settings.Enabled and theme.Accent or theme.Muted
+    master.Text = settings.Enabled and "ESP  [ON]" or "ESP  [OFF]"
+    master.TextColor3 = settings.Enabled and theme.Accent or theme.Muted
 end
-refreshers[#refreshers+1]=updateMaster
-connect(master.Activated,function() setSetting("Enabled",not settings.Enabled) end)
-local closeButton=button(menu,"×",MENU_W-33,12,20,19)
-closeButton.BackgroundTransparency=1
-closeButton.TextSize=16
-local sidebar=flatFrame(menu,8,36,66,MENU_H-61,Color3.fromRGB(12,12,12))
-flatFrame(menu,74,36,1,MENU_H-61,theme.Line)
-local footer=label(menu,"",15,MENU_H-23,MENU_W-30,16,10,theme.Muted)
+refreshers[#refreshers + 1] = updateMaster
+connect(master.Activated, function() setSetting("Enabled", not settings.Enabled) end)
+
+local closeButton = button(menu, "×", MENU_W - 31, 12, 18, 18)
+closeButton.BackgroundTransparency = 1
+closeButton.TextSize = 16
+closeButton.TextColor3 = theme.Muted
+
+local sidebarY = 50
+local sidebarH = MENU_H - sidebarY - FOOTER_H - 9
+local sidebar = flatFrame(menu, 8, sidebarY, SIDE_W, sidebarH, theme.Sidebar)
+flatFrame(menu, 8 + SIDE_W, sidebarY, 1, sidebarH, theme.Line)
+
+local footer = label(menu, "", 16, MENU_H - FOOTER_H - 3, MENU_W - 32, 16, 9, theme.Muted, Enum.Font.Code)
 local footerHint
-local function hintOn(item,text)
+local function hintOn(item, text)
     if not text then return end
-    connect(item.MouseEnter,function() footerHint=text end)
-    connect(item.MouseLeave,function() if footerHint==text then footerHint=nil end end)
+    connect(item.MouseEnter, function() footerHint = text end)
+    connect(item.MouseLeave, function() if footerHint == text then footerHint = nil end end)
 end
-local pages,tabs,tabIcons={}, {}, {}
-local activePage="RAGE"
-local contentW=278
-local columns,currentGroups={},{}
+
+local pages, tabs, tabIndicators, tabLabels = {}, {}, {}, {}
+local activePage = "RAGE"
+local pageX = SIDE_W + 23
+local pageW = MENU_W - pageX - 14
+local columnGap = 10
+local contentW = math.floor((pageW - columnGap) / 2)
+local columns, currentGroups = {}, {}
 local dropdownClose
+
 local function closeDropdown()
-    if dropdownClose then local close=dropdownClose; dropdownClose=nil; close() end
-end
-local function icon(parent,kind)
-    local segments={}
-    local function segment(x,y,w,h,rotation)
-        local part=flatFrame(parent,x,y,w,h,theme.Muted)
-        part.Rotation=rotation or 0
-        segments[#segments+1]=part
+    if dropdownClose then
+        local close = dropdownClose
+        dropdownClose = nil
+        close()
     end
-    if kind==1 then -- crosshair
-        segment(30,13,2,12); segment(30,35,2,12); segment(13,29,12,2); segment(37,29,12,2)
-        local ring=flatFrame(parent,22,21,18,18,theme.Muted)
-        ring.BackgroundTransparency=1
-        corner(ring,9)
-        segments[#segments+1]=stroke(ring,theme.Muted)
-    elseif kind==2 then -- cursor
-        segment(23,15,2,29); segment(23,15,24,2,44); segment(24,35,16,2,-25); segment(35,35,2,14,-28)
-    elseif kind==3 then -- opposing arrows
-        segment(16,22,29,2); segment(15,19,11,2,-40); segment(15,25,11,2,40)
-        segment(17,37,29,2); segment(37,34,11,2,40); segment(37,40,11,2,-40)
-    elseif kind==4 then -- body
-        local head=flatFrame(parent,26,13,10,10,theme.Muted); corner(head,5); segments[#segments+1]=head
-        segment(25,26,12,16); segment(17,27,5,17,15); segment(40,27,5,17,-15)
-        segment(25,43,5,12,6); segment(32,43,5,12,-6)
-    elseif kind==5 then -- sun
-        for i=0,7 do
-            local a=i*math.pi/4
-            segment(30+math.cos(a)*18,29+math.sin(a)*18,8,2,math.deg(a))
-        end
-        local sun=flatFrame(parent,25,24,12,12,theme.Muted); corner(sun,6); segments[#segments+1]=sun
-    elseif kind==6 then -- sliders
-        for i=0,2 do
-            segment(16,20+i*12,31,2); segment(23+(i%2)*12,16+i*12,5,10)
-        end
-    else -- file
-        segment(20,14,2,36); segment(20,14,24,2); segment(43,14,2,36); segment(20,49,25,2)
-        segment(26,24,12,2); segment(26,31,12,2); segment(26,38,9,2)
-    end
-    return segments
 end
+
 local function showPage(name)
     closeDropdown()
-    activePage=name
-    footerHint=nil
-    for key,page in pairs(pages) do
-        local selected=key==name
-        page.Visible=selected
-        tabs[key].BackgroundColor3=selected and theme.Background or Color3.fromRGB(12,12,12)
-        tabs[key].TextColor3=selected and theme.Text or theme.Muted
-        for _,part in ipairs(tabIcons[key]) do
-            if part:IsA("UIStroke") then part.Color=selected and theme.Text or theme.Muted
-            else part.BackgroundColor3=selected and theme.Text or theme.Muted end
-        end
+    activePage = name
+    footerHint = nil
+    for key, page in pairs(pages) do
+        local selected = key == name
+        page.Visible = selected
+        tabs[key].BackgroundColor3 = selected and Color3.fromRGB(22, 27, 23) or theme.Sidebar
+        tabLabels[key].TextColor3 = selected and theme.Text or Color3.fromRGB(154, 160, 169)
+        tabIndicators[key].Visible = selected
     end
 end
-for index,name in ipairs(skeetStyle.Tabs) do
-    local key=name
-    local tab=button(sidebar,"",0,(index-1)*71,66,71)
-    tab.Name=name
-    tabs[name]=tab
-    tabIcons[name]=icon(tab,index)
-    local caption=label(tab,name,0,55,66,12,8,theme.Muted)
-    caption.TextXAlignment=Enum.TextXAlignment.Center
-    flatFrame(tab,0,70,66,1,theme.Line)
-    hintOn(tab,name)
-    local page=new("Frame",{Name=name,Position=UDim2.fromOffset(91,42),
-        Size=UDim2.fromOffset(588,MENU_H-75),BackgroundTransparency=1,Visible=false},menu)
-    pages[name]=page
-    columns[name]={}
-    for col=1,2 do
-        local column=new("ScrollingFrame",{Name="Column"..col,Position=UDim2.fromOffset((col-1)*297,0),
-            Size=UDim2.fromOffset(288,MENU_H-77),BackgroundTransparency=1,BorderSizePixel=0,
-            ScrollBarThickness=2,ScrollBarImageColor3=theme.Off,CanvasSize=UDim2.fromOffset(0,0),
-            AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollingDirection=Enum.ScrollingDirection.Y},page)
-        new("UIListLayout",{Padding=UDim.new(0,16),SortOrder=Enum.SortOrder.LayoutOrder},column)
-        new("UIPadding",{PaddingTop=UDim.new(0,8),PaddingLeft=UDim.new(0,2),
-            PaddingBottom=UDim.new(0,8),PaddingRight=UDim.new(0,6)},column)
-        columns[name][col]=column
-        connect(column:GetPropertyChangedSignal("CanvasPosition"),closeDropdown)
+
+for index, name in ipairs(skeetStyle.Tabs) do
+    local key = name
+    local tabY = 26 + (index - 1) * 43
+    local tab = button(sidebar, "", 0, tabY, SIDE_W, 42)
+    tab.Name = name
+    tab.BackgroundColor3 = theme.Sidebar
+    tabs[name] = tab
+
+    local indicator = flatFrame(tab, 0, 0, 2, 42, theme.Accent)
+    indicator.Visible = false
+    tabIndicators[name] = indicator
+
+    local caption = label(tab, name, 17, 12, SIDE_W - 24, 18, 11, theme.Muted, Enum.Font.Arial)
+    tabLabels[name] = caption
+    hintOn(tab, name)
+
+    local page = new("Frame", {
+        Name = name,
+        Position = UDim2.fromOffset(pageX, 48),
+        Size = UDim2.fromOffset(pageW, MENU_H - 76),
+        BackgroundTransparency = 1,
+        Visible = false,
+    }, menu)
+    pages[name] = page
+    columns[name] = {}
+
+    for col = 1, 2 do
+        local column = new("ScrollingFrame", {
+            Name = "Column" .. col,
+            Position = UDim2.fromOffset((col - 1) * (contentW + columnGap), 0),
+            Size = UDim2.fromOffset(contentW, MENU_H - 82),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 1,
+            ScrollBarImageColor3 = theme.Accent,
+            ScrollBarImageTransparency = 0.45,
+            CanvasSize = UDim2.fromOffset(0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            ScrollingDirection = Enum.ScrollingDirection.Y,
+        }, page)
+        new("UIListLayout", {
+            Padding = UDim.new(0, layout.GroupGap or 10),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }, column)
+        new("UIPadding", {
+            PaddingTop = UDim.new(0, 5),
+            PaddingLeft = UDim.new(0, 1),
+            PaddingBottom = UDim.new(0, 8),
+            PaddingRight = UDim.new(0, 4),
+        }, column)
+        columns[name][col] = column
+        connect(column:GetPropertyChangedSignal("CanvasPosition"), closeDropdown)
     end
-    connect(tab.Activated,function() showPage(key) end)
+
+    connect(tab.Activated, function() showPage(key) end)
 end
+
+label(sidebar, "SPECTRA v10", 17, sidebarH - 49, SIDE_W - 28, 14, 9, theme.Muted, Enum.Font.Code)
+label(sidebar, "BUILT DIFFERENT", 17, sidebarH - 33, SIDE_W - 28, 14, 8, Color3.fromRGB(84, 91, 98), Enum.Font.Code)
+
 local order=0
 local function section(pageName,titleText,column)
     order=order+1

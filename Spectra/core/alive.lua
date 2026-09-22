@@ -5,6 +5,7 @@ return function(ctx)
     local Players = assert(ctx.Players, "Alive: Players missing")
     local settings = assert(ctx.Settings, "Alive: Settings missing")
     local deadCharacters = assert(ctx.DeadCharacters, "Alive: DeadCharacters missing")
+    local adapter = ctx.Adapter
 
     local deadAttributes = {"Dead", "IsDead", "Eliminated", "Killed", "Death", "Died"}
     local aliveAttributes = {"Alive", "IsAlive"}
@@ -39,7 +40,7 @@ return function(ctx)
 
     local function isAlive(player, expected)
         if not player or player.Parent ~= Players then return nil end
-        local character = player.Character
+        local character = adapter and adapter:GetCharacter(player) or player.Character
         if not character or (expected and character ~= expected) or deadCharacters[character] then
             return nil
         end
@@ -48,7 +49,7 @@ return function(ctx)
             return nil
         end
 
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local humanoid = adapter and adapter:GetHumanoid(character) or character:FindFirstChildOfClass("Humanoid")
         if not humanoid then return nil end
 
         if settings.AliveHealthCheck ~= false and humanoid.Health <= 0 then
@@ -61,8 +62,8 @@ return function(ctx)
         end
 
         if settings.AliveRootCheck ~= false then
-            local root = character:FindFirstChild("HumanoidRootPart")
-            local head = character:FindFirstChild("Head")
+            local root = adapter and adapter:GetRoot(character) or character:FindFirstChild("HumanoidRootPart")
+            local head = adapter and adapter:GetHead(character) or character:FindFirstChild("Head")
             if not root or not root:IsA("BasePart") or not root:IsDescendantOf(character)
                 or not head or not head:IsA("BasePart") or not head:IsDescendantOf(character) then
                 return nil

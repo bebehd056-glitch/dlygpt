@@ -1,5 +1,5 @@
 --[[
-SPECTRA v9 — modular targeting / multipoint visibility / classic menu.
+SPECTRA v10 — portable SDK / motion aim / world shader stack.
 Insert / RightShift: menu. End: unload. Regular aim: hold RMB.
 Client-only. Weapon activation depends on the weapon's input implementation.
 Silent keeps the camera aimed until input release, then restores the view.
@@ -320,7 +320,7 @@ end
 local header = new("Frame", {Name="DragHandle", BackgroundTransparency=1, Active=true,
     Position=UDim2.fromOffset(9,10), Size=UDim2.fromOffset(MENU_W-44,25)}, menu)
 local brand = label(header, BRAND_NAME, 9, 1, 210, 22, 13, theme.Text, Enum.Font.ArialBold)
-label(header, "[ modular / v9 ]", 214, 3, 130, 18, 10, theme.Muted)
+label(header, "[ portable / v10 ]", 214, 3, 130, 18, 10, theme.Muted)
 local master = button(header, "", MENU_W-164, 3, 104, 18)
 master.BackgroundTransparency=1
 master.Modal=true
@@ -559,7 +559,8 @@ end
 
 section("RAGE","Aimbot",1)
 toggle("RAGE","Enabled","SilentAim","Silent: поворот камеры → нажатие → отпускание → возврат")
-toggle("RAGE","Automatic fire","AutoFire","Только по живой видимой цели")
+toggle("RAGE","Automatic fire","AutoFire","Работает с Silent или Motion aim")
+choices("RAGE","Auto fire aim","AutoFireSource",{"Auto","Silent","Motion"})
 toggle("RAGE","Check team","AimTeamCheck")
 toggle("RAGE","Visibility check","AimWallCheck","Multipoint raycast по реально видимым частям")
 choices("RAGE","Ray origin","AimRayOrigin",{"Camera","Head","Both"})
@@ -580,14 +581,18 @@ toggle("RAGE","Target focus","TargetFocus")
 toggle("RAGE","Head marker","HeadMarker")
 toggle("RAGE","Death particles","DeathShatter")
 
-section("LEGIT","Aimbot",1)
-toggle("LEGIT","Enabled (hold RMB)","AimEnabled","Обычный aim: удерживать правую кнопку мыши")
-slider("LEGIT","Aim response","AimSmooth",2,40,1,"")
+section("LEGIT","Motion aim",1)
+toggle("LEGIT","Enabled","AimEnabled","Прицел физически ведётся к цели с ограниченной угловой скоростью")
+choices("LEGIT","Activation","MotionActivation",{"Hold RMB","Always"})
+slider("LEGIT","Aim speed","MotionAimSpeed",30,1080,15,"°/s")
+choices("LEGIT","Body selection","MotionAimPart",{"Head","Torso","Visible","Random"})
+slider("LEGIT","Randomization","MotionRandomization",0,100,5,"%")
+slider("LEGIT","Random refresh","MotionRandomRefreshMS",20,1000,20," ms")
+slider("LEGIT","Auto-fire tolerance","MotionFireTolerance",0.1,12,0.1,"°")
 slider("LEGIT","Maximum FOV","AimFOV",5,360,5,"°")
 slider("LEGIT","Maximum distance","AimDistance",50,3000,50," st")
 section("LEGIT","Target selection",2)
 choices("LEGIT","Priority","TargetPriority",{"Прицел","Ближайший","Мало HP"})
-choices("LEGIT","Hitbox","AimPart",{"Голова","Корпус","Видимая"})
 toggle("LEGIT","Check team","AimTeamCheck")
 toggle("LEGIT","Visibility check","AimWallCheck")
 slider("LEGIT","Target retention","TargetStickiness",0,50,5,"%")
@@ -629,6 +634,15 @@ slider("EFFECTS","Outline opacity","OutlineOpacity",0,100,1,"%")
 toggle("EFFECTS","Line glow","Glow")
 slider("EFFECTS","Line thickness","Thickness",1,3,0.5," px")
 slider("EFFECTS","Pulse speed","PulseSpeed",0.4,2.4,0.1," Hz")
+section("EFFECTS","Chams",1)
+toggle("EFFECTS","Enabled","ChamsEnabled")
+toggle("EFFECTS","Through walls","ChamsThroughWalls")
+choices("EFFECTS","Color mode","ChamsColorMode",{"Accent","Health","Team","Rainbow"})
+slider("EFFECTS","Fill","ChamsFill",0,100,1,"%")
+slider("EFFECTS","Outline","ChamsOutline",0,100,1,"%")
+toggle("EFFECTS","Pulse","ChamsPulse")
+slider("EFFECTS","Pulse speed","ChamsPulseSpeed",0.2,5,0.1," Hz")
+slider("EFFECTS","Rainbow speed","ChamsRainbowSpeed",0.02,1,0.02,"")
 section("EFFECTS","Colors",2)
 toggle("EFFECTS","Visibility colors","VisibilityColors")
 toggle("EFFECTS","Team colors","TeamColors")
@@ -659,9 +673,47 @@ section("MISC","Camera",1)
 toggle("MISC","Third person","ThirdPerson")
 slider("MISC","Third person distance","ThirdPersonDistance",2,24,1," st")
 slider("MISC","Shoulder offset","ThirdPersonShoulder",-4,4,0.5," st")
+
+section("MISC","World",1)
+choices("MISC","Lighting mode","WorldLightingMode",{"Game","Fullbright","Night","Sunset","Aurora"})
+toggle("MISC","Aurora ribbons","AuroraSky","Процедурное полярное сияние без внешних skybox assets")
+slider("MISC","Aurora intensity","AuroraIntensity",5,100,5,"%")
+slider("MISC","Aurora speed","AuroraSpeed",0.05,3,0.05,"")
+
 section("MISC","Radar",2)
 toggle("MISC","Enabled","Radar")
 slider("MISC","Radar range","RadarRange",50,1000,25," st")
+
+section("MISC","Color world / fog",2)
+toggle("MISC","Color world","ColorWorld")
+choices("MISC","World tint","WorldTint",{"Aurora","Blue","Purple","Green","Red","Gold","Mono"})
+slider("MISC","Tint strength","WorldTintStrength",0,100,5,"%")
+slider("MISC","Saturation","WorldSaturation",-100,100,5,"%")
+slider("MISC","Contrast","WorldContrast",-100,100,5,"%")
+slider("MISC","Brightness","WorldBrightness",-100,100,5,"%")
+toggle("MISC","Atmosphere fog","WorldFog")
+choices("MISC","Fog tint","FogColor",{"Aurora","Blue","Purple","Green","Red","Gold","Mono"})
+slider("MISC","Fog density","FogDensity",0,1,0.05,"")
+slider("MISC","Fog offset","FogOffset",-1,1,0.05,"")
+slider("MISC","Fog haze","FogHaze",0,10,0.25,"")
+slider("MISC","Fog glare","FogGlare",0,10,0.25,"")
+
+section("MISC","Post processing",2)
+toggle("MISC","Bloom","WorldBloom")
+slider("MISC","Bloom intensity","BloomIntensity",0,4,0.1,"")
+slider("MISC","Bloom size","BloomSize",0,56,1,"")
+slider("MISC","Bloom threshold","BloomThreshold",0,2,0.05,"")
+toggle("MISC","Blur","WorldBlur")
+slider("MISC","Blur size","BlurSize",0,24,1,"")
+toggle("MISC","Sun rays","WorldSunRays")
+slider("MISC","Sun rays intensity","SunRaysIntensity",0,1,0.02,"")
+slider("MISC","Sun rays spread","SunRaysSpread",0,1,0.02,"")
+toggle("MISC","Depth of field","WorldDOF")
+slider("MISC","DOF far","DOFFarIntensity",0,1,0.05,"")
+slider("MISC","DOF near","DOFNearIntensity",0,1,0.05,"")
+slider("MISC","Focus distance","DOFFocusDistance",1,500,5," st")
+slider("MISC","In-focus radius","DOFInFocusRadius",0,250,5," st")
+
 section("MISC","Interface",2)
 do
     local item=row("MISC",62)
@@ -676,7 +728,17 @@ local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,Aim
     AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true,
     AliveHealthCheck=true,AliveStateCheck=true,AliveAncestryCheck=true,AliveRootCheck=true,AliveDeadTags=true,
     ThirdPerson=true,ThirdPersonDistance=true,ThirdPersonShoulder=true,
-    BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true}
+    BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true,
+    AutoFireSource=true,MotionAimSpeed=true,MotionAimPart=true,MotionRandomization=true,
+    MotionRandomRefreshMS=true,MotionFireTolerance=true,MotionActivation=true,
+    ChamsEnabled=true,ChamsThroughWalls=true,ChamsFill=true,ChamsOutline=true,ChamsPulse=true,
+    ChamsPulseSpeed=true,ChamsColorMode=true,ChamsRainbowSpeed=true,
+    WorldLightingMode=true,AuroraSky=true,AuroraIntensity=true,AuroraSpeed=true,
+    ColorWorld=true,WorldTint=true,WorldTintStrength=true,WorldSaturation=true,WorldContrast=true,WorldBrightness=true,
+    WorldFog=true,FogDensity=true,FogOffset=true,FogHaze=true,FogGlare=true,FogColor=true,
+    WorldBloom=true,BloomIntensity=true,BloomSize=true,BloomThreshold=true,WorldBlur=true,BlurSize=true,
+    WorldSunRays=true,SunRaysIntensity=true,SunRaysSpread=true,WorldDOF=true,DOFFarIntensity=true,
+    DOFNearIntensity=true,DOFFocusDistance=true,DOFInFocusRadius=true}
 local profiles={
     {Name="Clean",Values={Boxes=false,Distance=false,Radar=false,Arrows=false,VisibilityColors=false,Tool=false,HighlightStyle="Контур",Glow=false}},
     {Name="Tactical",Values={}},
@@ -1986,7 +2048,7 @@ RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 50, 
 end)
 
 -- Portable creator API: no PlaceId, RemoteEvent names, weapon paths, or HTTP calls in main.lua.
-local api = {Version="9.0.0"}
+local api = {Version="10.0.0"}
 function api:Set(key,value)
     if not alive then return false,"Spectra is unloaded" end
     return setSetting(key,value)

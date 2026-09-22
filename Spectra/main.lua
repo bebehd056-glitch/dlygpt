@@ -1205,7 +1205,7 @@ local function updateRadar(data, camera, origin, color)
     data.RadarDot.BackgroundTransparency = outside and 0.4 or 0
 end
 local function updatePlayer(data, camera, origin, now)
-    if not settings.Enabled or not data.Eligible or data.Player.Character ~= data.Character
+    if not settings.Enabled or not data.Eligible or GameAdapter:GetCharacter(data.Player) ~= data.Character
         or not data.Root or not data.Root:IsDescendantOf(data.Character)
         or not data.Head or not data.Head:IsDescendantOf(data.Character)
         or deadCharacters[data.Character]
@@ -1351,7 +1351,7 @@ local function startCombat()
 
     local function ownCharacter()
         local character, humanoid = liveCharacter(localPlayer)
-        local head = character and character:FindFirstChild("Head")
+        local head = character and GameAdapter:GetHead(character)
         if not head or not head:IsA("BasePart") then return nil end
         return character, head, humanoid
     end
@@ -1361,7 +1361,8 @@ local function startCombat()
     end
     local function updateFilter(camera)
         local ignored = {camera, debrisFolder}
-        if localPlayer.Character then ignored[#ignored + 1] = localPlayer.Character end
+        local own = GameAdapter:GetCharacter(localPlayer)
+        if own then ignored[#ignored + 1] = own end
         rayParams.FilterDescendantsInstances = ignored
     end
     local function enemyAlive(player, expected)
@@ -1381,6 +1382,13 @@ local function startCombat()
             local _, head = ownCharacter()
             return head
         end,
+        Adapter = GameAdapter,
+    })
+    local motionAim = importModule("combat/motion_aim.lua")({
+        Settings = settings,
+        Targeting = targeting,
+        Visibility = Visibility,
+        UserInputService = UserInputService,
     })
     local antiAim = importModule("combat/antiaim.lua")({
         Settings = settings,
@@ -1391,15 +1399,15 @@ local function startCombat()
     })
 
     local function validPoint(camera, part, character, forceWalls)
-        local player = character and Players:GetPlayerFromCharacter(character)
+        local player = character and GameAdapter:GetPlayerFromCharacter(character)
         if not player then return nil end
         return targeting:ValidatePoint(camera, rayParams, player, character, part, forceWalls)
     end
 
-    local function findTarget(camera, forceWalls)
+    local function findTarget(camera, forceWalls, partMode)
         if blocked() then return nil end
         updateFilter(camera)
-        local player, _, part, point = targeting:Find(camera, rayParams, currentTarget, forceWalls)
+        local player, _, part, point = targeting:Find(camera, rayParams, currentTarget, forceWalls, partMode)
         return player, part, point
     end
 
@@ -1512,7 +1520,7 @@ local function startCombat()
         if pendingAcquire or shot or blocked() or not settings.SilentAim then return false end
         if auto and os.clock() < autoFireDue then return false end
         pendingAcquire = {At=os.clock() + settings.AcquireMS / 1000, Auto=auto == true,
-            Player=player, Character=player.Character, Part=part}
+            Player=player, Character=GameAdapter:GetCharacter(player), Part=part}
         restoreAnti()
         return true
     end
@@ -2017,8 +2025,8 @@ local function render(dt)
     thirdPerson:Update()
     combat:Update(dt, camera, now)
     telemetry:Update(camera, now)
-    local localCharacter = localPlayer.Character
-    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+    local localCharacter = GameAdapter:GetCharacter(localPlayer)
+    local localRoot = localCharacter and GameAdapter:GetRoot(localCharacter)
     local origin = localRoot and localRoot.Position or camera.CFrame.Position
     local ignore = {camera}
     if localCharacter then ignore[#ignore + 1] = localCharacter end

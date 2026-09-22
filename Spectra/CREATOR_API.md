@@ -151,6 +151,14 @@ _G.SpectraOptions.GameAdapter = {
         return player.Character
     end,
 
+    GetCharacterAddedSignal = function(player)
+        return player.CharacterAdded
+    end,
+
+    GetCharacterRemovingSignal = function(player)
+        return player.CharacterRemoving
+    end,
+
     GetHumanoid = function(character)
         return character:FindFirstChildOfClass("Humanoid")
     end,

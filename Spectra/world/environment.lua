@@ -25,20 +25,26 @@ return function(ctx)
     }
 
     local originalAtmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
-    local atmosphereCreated = originalAtmosphere == nil
-    local atmosphere = originalAtmosphere or Instance.new("Atmosphere")
-    if atmosphereCreated then
+    local atmosphere = originalAtmosphere
+    local atmosphereCreated = false
+    local fogActive = false
+    local atmosphereSnapshot = originalAtmosphere and {
+        Density = originalAtmosphere.Density,
+        Offset = originalAtmosphere.Offset,
+        Haze = originalAtmosphere.Haze,
+        Glare = originalAtmosphere.Glare,
+        Color = originalAtmosphere.Color,
+        Decay = originalAtmosphere.Decay,
+    } or nil
+
+    local function ensureAtmosphere()
+        if atmosphere and atmosphere.Parent then return atmosphere end
+        atmosphere = Instance.new("Atmosphere")
         atmosphere.Name = "SpectraAtmosphere"
         atmosphere.Parent = Lighting
+        atmosphereCreated = true
+        return atmosphere
     end
-    local atmosphereSnapshot = {
-        Density = atmosphere.Density,
-        Offset = atmosphere.Offset,
-        Haze = atmosphere.Haze,
-        Glare = atmosphere.Glare,
-        Color = atmosphere.Color,
-        Decay = atmosphere.Decay,
-    }
 
     local tintColors = {
         Aurora = Color3.fromRGB(145, 205, 225),
@@ -170,15 +176,24 @@ return function(ctx)
 
     local function updateAtmosphere()
         if settings.WorldFog then
-            atmosphere.Density = settings.FogDensity or 0.3
-            atmosphere.Offset = settings.FogOffset or 0
-            atmosphere.Haze = settings.FogHaze or 1.5
-            atmosphere.Glare = settings.FogGlare or 0
+            local active = ensureAtmosphere()
+            active.Density = settings.FogDensity or 0.3
+            active.Offset = settings.FogOffset or 0
+            active.Haze = settings.FogHaze or 1.5
+            active.Glare = settings.FogGlare or 0
             local base = tintColors[settings.FogColor or "Blue"] or tintColors.Blue
-            atmosphere.Color = base
-            atmosphere.Decay = base:Lerp(Color3.fromRGB(15, 18, 28), 0.55)
-        else
-            for key, value in pairs(atmosphereSnapshot) do atmosphere[key] = value end
+            active.Color = base
+            active.Decay = base:Lerp(Color3.fromRGB(15, 18, 28), 0.55)
+            fogActive = true
+        elseif fogActive then
+            if atmosphereCreated then
+                if atmosphere and atmosphere.Parent then atmosphere:Destroy() end
+                atmosphere = originalAtmosphere
+                atmosphereCreated = false
+            elseif atmosphere and atmosphereSnapshot then
+                for key, value in pairs(atmosphereSnapshot) do atmosphere[key] = value end
+            end
+            fogActive = false
         end
     end
 
@@ -290,8 +305,8 @@ return function(ctx)
         post = {}
         restoreLighting()
         if atmosphereCreated then
-            if atmosphere.Parent then atmosphere:Destroy() end
-        else
+            if atmosphere and atmosphere.Parent then atmosphere:Destroy() end
+        elseif atmosphere and atmosphereSnapshot then
             for key, value in pairs(atmosphereSnapshot) do atmosphere[key] = value end
         end
     end

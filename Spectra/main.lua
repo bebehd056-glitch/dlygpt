@@ -1828,30 +1828,35 @@ local function startCombat()
                     local data = visuals[player]
                     if data then hide(data) releaseHighlight(data) end
                     metadataDue = 0
-                    local nextHumanoid = character:FindFirstChildOfClass("Humanoid")
+                    local nextHumanoid = GameAdapter:GetHumanoid(character)
                     if nextHumanoid then attachHumanoid(nextHumanoid) end
                 end
             end)
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            local humanoid = GameAdapter:GetHumanoid(character)
             if humanoid then attachHumanoid(humanoid) end
         end
-        record.Spawn = player.CharacterAdded:Connect(attach)
-        record.Removing = player.CharacterRemoving:Connect(function(character)
-            markDead(player, character)
-            if record.Character == character then
-                clearLife()
-                restoreBody(character)
-                record.Character, record.OnDead = nil, nil
-            end
-        end)
-        if player.Character then attach(player.Character) end
+        local addedSignal = GameAdapter:GetCharacterAddedSignal(player)
+        local removingSignal = GameAdapter:GetCharacterRemovingSignal(player)
+        if addedSignal then record.Spawn = addedSignal:Connect(attach) end
+        if removingSignal then
+            record.Removing = removingSignal:Connect(function(character)
+                markDead(player, character)
+                if record.Character == character then
+                    clearLife()
+                    restoreBody(character)
+                    record.Character, record.OnDead = nil, nil
+                end
+            end)
+        end
+        local currentCharacter = GameAdapter:GetCharacter(player)
+        if currentCharacter then attach(currentCharacter) end
     end
     local function unwatch(player)
         local record = watchers[player]
         if not record then return end
         markDead(player, record.Character)
-        record.Spawn:Disconnect()
-        record.Removing:Disconnect()
+        if record.Spawn then record.Spawn:Disconnect() end
+        if record.Removing then record.Removing:Disconnect() end
         disconnect(record.Life)
         disconnect(record.HumanoidConnections)
         if record.Character then restoreBody(record.Character) end

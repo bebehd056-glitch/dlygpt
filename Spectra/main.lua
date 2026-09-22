@@ -71,6 +71,20 @@ local defaults = {
     ThirdPerson = false, ThirdPersonDistance = 8, ThirdPersonShoulder = 0,
     BulletTracers = true, HitLogs = true, HitMarker = true, HitFlash = true,
     HitLogDuration = 2.5, TracerDuration = 0.35,
+    AutoFireSource = "Auto",
+    MotionAimSpeed = 240, MotionAimPart = "Visible", MotionRandomization = 18,
+    MotionRandomRefreshMS = 140, MotionFireTolerance = 1.25, MotionActivation = "Hold RMB",
+    ChamsEnabled = false, ChamsThroughWalls = true, ChamsFill = 36, ChamsOutline = 88,
+    ChamsPulse = false, ChamsPulseSpeed = 1.2, ChamsColorMode = "Accent", ChamsRainbowSpeed = 0.12,
+    WorldLightingMode = "Game", AuroraSky = false, AuroraIntensity = 55, AuroraSpeed = 0.5,
+    ColorWorld = false, WorldTint = "Aurora", WorldTintStrength = 35,
+    WorldSaturation = 0, WorldContrast = 0, WorldBrightness = 0,
+    WorldFog = false, FogDensity = 0.3, FogOffset = 0, FogHaze = 1.5, FogGlare = 0, FogColor = "Blue",
+    WorldBloom = false, BloomIntensity = 1, BloomSize = 24, BloomThreshold = 1,
+    WorldBlur = false, BlurSize = 4,
+    WorldSunRays = false, SunRaysIntensity = 0.08, SunRaysSpread = 0.85,
+    WorldDOF = false, DOFFarIntensity = 0.15, DOFNearIntensity = 0,
+    DOFFocusDistance = 60, DOFInFocusRadius = 45,
     HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
 local settingRanges = {
@@ -81,12 +95,27 @@ local settingRanges = {
     AntiYaw={-180,180}, AntiJitter={0,120}, AntiSpeed={30,720}, AntiPeriod={50,500},
     ThirdPersonDistance={2,24}, ThirdPersonShoulder={-4,4},
     HitLogDuration={0.5,8}, TracerDuration={0.08,1.5},
+    MotionAimSpeed={30,1080}, MotionRandomization={0,100}, MotionRandomRefreshMS={20,1000},
+    MotionFireTolerance={0.1,12},
+    ChamsFill={0,100}, ChamsOutline={0,100}, ChamsPulseSpeed={0.2,5}, ChamsRainbowSpeed={0.02,1},
+    AuroraIntensity={5,100}, AuroraSpeed={0.05,3},
+    WorldTintStrength={0,100}, WorldSaturation={-100,100}, WorldContrast={-100,100}, WorldBrightness={-100,100},
+    FogDensity={0,1}, FogOffset={-1,1}, FogHaze={0,10}, FogGlare={0,10},
+    BloomIntensity={0,4}, BloomSize={0,56}, BloomThreshold={0,2}, BlurSize={0,24},
+    SunRaysIntensity={0,1}, SunRaysSpread={0,1},
+    DOFFarIntensity={0,1}, DOFNearIntensity={0,1}, DOFFocusDistance={1,500}, DOFInFocusRadius={0,250},
 }
 local settingChoices = {
     BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
     AimPart={"Голова","Корпус","Видимая"}, TargetPriority={"Прицел","Ближайший","Мало HP"},
     FireMethod={"VirtualUser","MouseButton","Creator"}, AntiMode={"Назад","Jitter","Spin"},
     AimRayOrigin={"Camera","Head","Both"}, VisibilitySampling={"Fast","Balanced","Dense"},
+    AutoFireSource={"Auto","Silent","Motion"}, MotionAimPart={"Head","Torso","Visible","Random"},
+    MotionActivation={"Hold RMB","Always"},
+    ChamsColorMode={"Accent","Health","Team","Rainbow"},
+    WorldLightingMode={"Game","Fullbright","Night","Sunset","Aurora"},
+    WorldTint={"Aurora","Blue","Purple","Green","Red","Gold","Mono"},
+    FogColor={"Aurora","Blue","Purple","Green","Red","Gold","Mono"},
 }
 local function normalizeSetting(key,value)
     if defaults[key] == nil or type(value) ~= type(defaults[key]) then return nil,"Unknown setting or wrong type" end
@@ -121,10 +150,16 @@ local metadataDue, statsDue = 0, 0
 local profileName = "Tactical"
 local cleanup
 local deadCharacters = setmetatable({}, {__mode = "k"})
+local GameAdapter = importModule("core/game_adapter.lua")({
+    Players = Players,
+    LocalPlayer = localPlayer,
+    Startup = startup,
+})
 local Alive = importModule("core/alive.lua")({
     Players = Players,
     Settings = settings,
     DeadCharacters = deadCharacters,
+    Adapter = GameAdapter,
 })
 local Visibility = importModule("core/visibility.lua")({
     Settings = settings,
@@ -208,6 +243,18 @@ local telemetry = importModule("visuals/telemetry.lua")({
 local thirdPerson = importModule("camera/thirdperson.lua")({
     LocalPlayer = localPlayer,
     Settings = settings,
+})
+local chams = importModule("visuals/chams.lua")({
+    Players = Players,
+    LocalPlayer = localPlayer,
+    Settings = settings,
+    Alive = Alive,
+    Adapter = GameAdapter,
+    Theme = theme,
+})
+local environment = importModule("world/environment.lua")({
+    Settings = settings,
+    Workspace = workspace,
 })
 
 -- One line owns a sharp core and a faint, wider halo. No scene-wide post processing.
@@ -838,7 +885,7 @@ local function removePlayer(player)
     visuals[player] = nil
 end
 local function isTeammate(player)
-    return not localPlayer.Neutral and not player.Neutral and localPlayer.Team ~= nil and player.Team == localPlayer.Team
+    return GameAdapter:IsTeammate(player)
 end
 local function getColor(data)
     if settings.VisibilityColors and data.VisibleToCamera ~= nil then
@@ -850,16 +897,16 @@ end
 -- Cache body bounds and rig connections at ~7 Hz, leaving projection smooth each frame.
 -- Accessory/Tool parts are excluded so held items cannot inflate the body box.
 local function cacheCharacter(data)
-    local character = data.Player.Character
+    local character = GameAdapter:GetCharacter(data.Player)
     if data.Character ~= character then
         releaseHighlight(data)
         data.Character = character
         data.VisibleToCamera = nil
         data.RayDue = 0
     end
-    data.Root = character and character:FindFirstChild("HumanoidRootPart")
-    data.Head = character and character:FindFirstChild("Head")
-    data.Humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    data.Root = character and GameAdapter:GetRoot(character)
+    data.Head = character and GameAdapter:GetHead(character)
+    data.Humanoid = character and GameAdapter:GetHumanoid(character)
     if not data.Root or not data.Root:IsA("BasePart") or not data.Head or not data.Head:IsA("BasePart") or not data.Humanoid then
         data.Eligible = false
         return
@@ -1022,6 +1069,10 @@ local function drawWorldLine(line, camera, a, b, color)
     if first then drawLine(line, first, second, color) else hideLine(line) end
 end
 local function updateHighlight(data, color, now)
+    if settings.ChamsEnabled then
+        releaseHighlight(data)
+        return
+    end
     if not data.AllowHighlight or not settings.Highlights then return end
     if not data.Highlight then
         data.Highlight = new("Highlight", {Name = "SpectraHighlight", Adornee = data.Character,

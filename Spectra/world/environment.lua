@@ -75,8 +75,8 @@ return function(ctx)
         if mode == "Fullbright" then
             Lighting.Ambient = Color3.fromRGB(205, 205, 205)
             Lighting.OutdoorAmbient = Color3.fromRGB(205, 205, 205)
-            Lighting.ColorShift_Top = Color3.new()
-            Lighting.ColorShift_Bottom = Color3.new()
+            Lighting.ColorShift_Top = Color3.new(0, 0, 0)
+            Lighting.ColorShift_Bottom = Color3.new(0, 0, 0)
             Lighting.Brightness = 2.4
             Lighting.ExposureCompensation = 0.25
             Lighting.GlobalShadows = false

@@ -484,69 +484,104 @@ label(sidebar, "BUILT DIFFERENT", 17, sidebarH - 33, SIDE_W - 28, 14, 8, Color3.
 local order=0
 local function section(pageName,titleText,column)
     order=order+1
-    local group=new("Frame",{Name=titleText,BackgroundColor3=Color3.fromRGB(23,23,23),
-        BorderSizePixel=1,BorderColor3=Color3.new(0,0,0),Size=UDim2.fromOffset(contentW,28),
-        AutomaticSize=Enum.AutomaticSize.Y,LayoutOrder=order},columns[pageName][column or 1])
-    stroke(group,Color3.fromRGB(49,49,49))
-    local title=label(group,titleText,10,-8,contentW-20,16,11,theme.Text,Enum.Font.ArialBold)
+    local group=new("Frame",{
+        Name=titleText,
+        BackgroundColor3=Color3.fromRGB(16,17,18),
+        BorderSizePixel=1,
+        BorderColor3=Color3.fromRGB(4,4,4),
+        Size=UDim2.fromOffset(contentW,25),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        LayoutOrder=order,
+    },columns[pageName][column or 1])
+    stroke(group,Color3.fromRGB(46,49,51))
+
+    local title=label(group,titleText,9,-7,contentW-18,14,10,theme.Text,Enum.Font.Arial)
     title.AutomaticSize=Enum.AutomaticSize.X
-    title.Size=UDim2.fromOffset(0,16)
+    title.Size=UDim2.fromOffset(0,14)
     title.BackgroundTransparency=0
-    title.BackgroundColor3=Color3.fromRGB(23,23,23)
+    title.BackgroundColor3=Color3.fromRGB(16,17,18)
     title.ZIndex=3
-    local body=new("Frame",{Name="Body",Position=UDim2.fromOffset(12,16),
-        Size=UDim2.fromOffset(contentW-24,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1},group)
-    new("UIListLayout",{Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder},body)
-    new("UIPadding",{PaddingBottom=UDim.new(0,12)},body)
+
+    local marker=flatFrame(group,6,-2,3,3,theme.Accent)
+    marker.ZIndex=4
+
+    local body=new("Frame",{
+        Name="Body",
+        Position=UDim2.fromOffset(10,14),
+        Size=UDim2.fromOffset(contentW-20,0),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        BackgroundTransparency=1,
+    },group)
+    new("UIListLayout",{Padding=UDim.new(0,1),SortOrder=Enum.SortOrder.LayoutOrder},body)
+    new("UIPadding",{PaddingBottom=UDim.new(0,9)},body)
     currentGroups[pageName]=body
     return group
 end
+
 local function row(pageName,height)
     order=order+1
-    return new("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,height),LayoutOrder=order},currentGroups[pageName])
+    return new("Frame",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,height),
+        LayoutOrder=order,
+    },currentGroups[pageName])
 end
+
 local function shade(parent,top,bottom)
     new("UIGradient",{Rotation=90,Color=ColorSequence.new(top,bottom)},parent)
 end
+
 local function toggle(pageName,titleText,key,hint)
-    local item=row(pageName,21)
-    local hit=button(item,"",0,0,contentW-24,21)
+    local item=row(pageName,18)
+    local hit=button(item,"",0,0,contentW-20,18)
     hit.BackgroundTransparency=1
-    local box=flatFrame(hit,1,5,10,10,Color3.fromRGB(58,58,58))
+
+    local box=flatFrame(hit,1,4,9,9,Color3.fromRGB(38,40,42))
     box.BorderSizePixel=1
-    box.BorderColor3=Color3.new(0,0,0)
-    shade(box,Color3.new(1,1,1),Color3.fromRGB(145,145,145))
-    local textLabel=label(hit,titleText,20,1,contentW-48,18,11)
+    box.BorderColor3=Color3.fromRGB(2,2,2)
+
+    local inner=flatFrame(box,2,2,5,5,theme.Accent)
+    local textLabel=label(hit,titleText,17,0,contentW-43,17,10,theme.Text,Enum.Font.Arial)
+
     refreshers[#refreshers+1]=function()
-        box.BackgroundColor3=settings[key] and theme.Accent or Color3.fromRGB(62,62,62)
-        textLabel.TextColor3=settings[key] and theme.Text or Color3.fromRGB(184,184,184)
+        inner.Visible=settings[key] == true
+        box.BackgroundColor3=settings[key] and Color3.fromRGB(24,38,27) or Color3.fromRGB(38,40,42)
+        textLabel.TextColor3=settings[key] and theme.Text or Color3.fromRGB(181,186,192)
     end
+
     hintOn(hit,hint)
     connect(hit.Activated,function() setSetting(key,not settings[key]) end)
 end
+
 local sliderDrag
 local function slider(pageName,titleText,key,minimum,maximum,step,unit)
-    local item=row(pageName,37)
-    label(item,titleText,20,0,contentW-44,16,11)
-    local hit=button(item,"",21,16,contentW-58,19)
+    local item=row(pageName,30)
+    local titleLabel=label(item,titleText,17,0,contentW-108,14,10,Color3.fromRGB(188,194,201),Enum.Font.Arial)
+    local valueLabel=label(item,"",contentW-91,0,68,14,9,theme.Text,Enum.Font.Code)
+    valueLabel.TextXAlignment=Enum.TextXAlignment.Right
+
+    local hit=button(item,"",17,16,contentW-40,12)
     hit.BackgroundTransparency=1
-    local track=flatFrame(hit,0,4,contentW-58,7,Color3.fromRGB(45,45,45))
-    track.BorderSizePixel=1; track.BorderColor3=Color3.new(0,0,0)
-    local fill=flatFrame(track,0,0,0,7,theme.Accent)
-    shade(fill,Color3.new(1,1,1),Color3.fromRGB(132,132,132))
-    local valueLabel=label(hit,"",0,1,contentW-58,14,10,theme.Text,Enum.Font.ArialBold)
-    valueLabel.TextXAlignment=Enum.TextXAlignment.Center
-    valueLabel.TextStrokeTransparency=0
-    valueLabel.TextStrokeColor3=Color3.new(0,0,0)
-    valueLabel.ZIndex=4
+    local track=flatFrame(hit,0,3,contentW-40,4,Color3.fromRGB(39,42,44))
+    track.BorderSizePixel=1
+    track.BorderColor3=Color3.fromRGB(3,3,3)
+    local fill=flatFrame(track,0,0,0,4,theme.Accent)
+    local knob=flatFrame(hit,0,1,4,8,theme.Accent)
+
     local function fromX(x)
         local p=math.clamp((x-hit.AbsolutePosition.X)/math.max(hit.AbsoluteSize.X,1),0,1)
-        setSetting(key,math.clamp(minimum+math.floor(p*(maximum-minimum)/step+0.5)*step,minimum,maximum))
+        local value=minimum+math.floor(p*(maximum-minimum)/step+0.5)*step
+        setSetting(key,math.clamp(value,minimum,maximum))
     end
+
     refreshers[#refreshers+1]=function()
-        fill.Size=UDim2.fromScale((settings[key]-minimum)/(maximum-minimum),1)
-        valueLabel.Text=string.format(step<1 and "%.1f%s" or "%.0f%s",settings[key],unit or "")
+        local p=math.clamp((settings[key]-minimum)/(maximum-minimum),0,1)
+        fill.Size=UDim2.fromScale(p,1)
+        knob.Position=UDim2.new(p,-2,0,1)
+        local format=step < 0.1 and "%.2f%s" or (step < 1 and "%.1f%s" or "%.0f%s")
+        valueLabel.Text=string.format(format,settings[key],unit or "")
     end
+
     connect(hit.InputBegan,function(input)
         if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
             closeDropdown()
@@ -555,55 +590,94 @@ local function slider(pageName,titleText,key,minimum,maximum,step,unit)
         end
     end)
 end
+
 local displayOptions={
     ["Голова"]="Head",["Корпус"]="Body",["Видимая"]="Visible point",
     ["Прицел"]="Crosshair",["Ближайший"]="Distance",["Мало HP"]="Lowest health",
     ["Назад"]="Backward",["Углы"]="Corners",["Рамка"]="Full box",
     ["Мягкий"]="Soft",["Плотный"]="Solid",["Контур"]="Outline",["Пульс"]="Pulse",
 }
+
 local function choices(pageName,titleText,key,options)
-    local item=row(pageName,46)
-    label(item,titleText,20,0,contentW-44,17,11)
-    local hit=button(item,"",21,20,contentW-58,20)
-    hit.BorderSizePixel=1; hit.BorderColor3=Color3.new(0,0,0)
-    shade(hit,Color3.fromRGB(55,55,55),Color3.fromRGB(30,30,30))
-    hit.BackgroundColor3=Color3.new(1,1,1)
-    local valueLabel=label(hit,"",7,1,contentW-85,18,11)
-    label(hit,"▾",contentW-75,1,12,17,11,theme.Muted)
-    refreshers[#refreshers+1]=function() valueLabel.Text=displayOptions[settings[key]] or settings[key] end
+    local item=row(pageName,36)
+    label(item,titleText,17,0,contentW-40,14,10,Color3.fromRGB(188,194,201),Enum.Font.Arial)
+
+    local hit=button(item,"",17,16,contentW-40,17)
+    hit.BorderSizePixel=1
+    hit.BorderColor3=Color3.fromRGB(3,3,3)
+    hit.BackgroundColor3=Color3.fromRGB(24,25,27)
+
+    local valueLabel=label(hit,"",6,0,contentW-67,16,9,theme.Text,Enum.Font.Arial)
+    local arrow=label(hit,"▾",contentW-61,0,12,16,9,theme.Muted,Enum.Font.Arial)
+    arrow.TextXAlignment=Enum.TextXAlignment.Center
+
+    refreshers[#refreshers+1]=function()
+        valueLabel.Text=displayOptions[settings[key]] or settings[key]
+    end
+
+    connect(hit.MouseEnter,function() hit.BackgroundColor3=Color3.fromRGB(29,31,32) end)
+    connect(hit.MouseLeave,function() hit.BackgroundColor3=Color3.fromRGB(24,25,27) end)
+
     connect(hit.Activated,function()
         local wasOpen=hit:GetAttribute("DropdownOpen")
         closeDropdown()
         if wasOpen then return end
+
         sliderDrag=nil
         hit:SetAttribute("DropdownOpen",true)
+
         local shield=button(gui,"",0,0,0,0)
-        shield.Name="DropdownShield"; shield.Size=UDim2.fromScale(1,1)
-        shield.BackgroundTransparency=1; shield.ZIndex=80
+        shield.Name="DropdownShield"
+        shield.Size=UDim2.fromScale(1,1)
+        shield.BackgroundTransparency=1
+        shield.ZIndex=80
+
         local scale=menuScale.Scale
-        local h=#options*22*scale
-        local x,y=hit.AbsolutePosition.X,hit.AbsolutePosition.Y+hit.AbsoluteSize.Y+2
+        local optionHeight=19
+        local h=#options*optionHeight*scale
+        local x,y=hit.AbsolutePosition.X,hit.AbsolutePosition.Y+hit.AbsoluteSize.Y+1
         local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
-        if viewport and y+h>viewport.Y-8 then y=hit.AbsolutePosition.Y-h-2 end
-        local popup=new("Frame",{Name="Dropdown",Position=UDim2.fromOffset(x,math.max(8,y)),
-            Size=UDim2.fromOffset(hit.AbsoluteSize.X,h),BackgroundColor3=Color3.fromRGB(20,20,20),
-            BorderSizePixel=1,BorderColor3=Color3.new(0,0,0),ZIndex=81},shield)
+        if viewport and y+h>viewport.Y-8 then y=hit.AbsolutePosition.Y-h-1 end
+
+        local popup=new("Frame",{
+            Name="Dropdown",
+            Position=UDim2.fromOffset(x,math.max(8,y)),
+            Size=UDim2.fromOffset(hit.AbsoluteSize.X,h),
+            BackgroundColor3=Color3.fromRGB(18,19,20),
+            BorderSizePixel=1,
+            BorderColor3=Color3.fromRGB(3,3,3),
+            ZIndex=81,
+        },shield)
+        stroke(popup,Color3.fromRGB(50,53,55))
+
         local popupConnections={}
         dropdownClose=function()
             hit:SetAttribute("DropdownOpen",false)
             for _,connection in ipairs(popupConnections) do connection:Disconnect() end
             shield:Destroy()
         end
+
         popupConnections[#popupConnections+1]=shield.Activated:Connect(closeDropdown)
+
         for i,option in ipairs(options) do
             local value=option
-            local choice=button(popup,displayOptions[option] or option,0,(i-1)*22*scale,hit.AbsoluteSize.X,22*scale)
-            choice.TextSize=math.max(8,11*scale); choice.ZIndex=82
+            local choice=button(popup,displayOptions[option] or option,0,(i-1)*optionHeight*scale,hit.AbsoluteSize.X,optionHeight*scale)
+            choice.TextSize=math.max(8,9*scale)
+            choice.TextXAlignment=Enum.TextXAlignment.Left
+            choice.ZIndex=82
             choice.TextColor3=settings[key]==option and theme.Accent or theme.Text
-            choice.BackgroundColor3=Color3.fromRGB(24,24,24)
-            popupConnections[#popupConnections+1]=choice.Activated:Connect(function() setSetting(key,value); closeDropdown() end)
-            popupConnections[#popupConnections+1]=choice.MouseEnter:Connect(function() choice.BackgroundColor3=Color3.fromRGB(43,43,43) end)
-            popupConnections[#popupConnections+1]=choice.MouseLeave:Connect(function() choice.BackgroundColor3=Color3.fromRGB(24,24,24) end)
+            choice.BackgroundColor3=Color3.fromRGB(18,19,20)
+            local pad=new("UIPadding",{PaddingLeft=UDim.new(0,6)},choice)
+            popupConnections[#popupConnections+1]=choice.Activated:Connect(function()
+                setSetting(key,value)
+                closeDropdown()
+            end)
+            popupConnections[#popupConnections+1]=choice.MouseEnter:Connect(function()
+                choice.BackgroundColor3=Color3.fromRGB(28,31,29)
+            end)
+            popupConnections[#popupConnections+1]=choice.MouseLeave:Connect(function()
+                choice.BackgroundColor3=Color3.fromRGB(18,19,20)
+            end)
         end
     end)
 end

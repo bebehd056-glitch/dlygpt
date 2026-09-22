@@ -32,8 +32,21 @@ local startup = type(_G.SpectraOptions) == "table" and _G.SpectraOptions or {}
 local MODULE_ROOT = type(startup.ModuleRoot) == "string" and startup.ModuleRoot
     or "https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/main/Spectra/"
 local moduleCache = {}
+local moduleResolver = type(startup.ModuleResolver) == "function" and startup.ModuleResolver or nil
 local function importModule(path)
     if moduleCache[path] then return moduleCache[path] end
+
+    if moduleResolver then
+        local ok, exported = pcall(moduleResolver, path)
+        if not ok then error("Spectra ModuleResolver failed [" .. path .. "]: " .. tostring(exported)) end
+        if exported == nil then error("Spectra ModuleResolver returned nil [" .. path .. "]") end
+        moduleCache[path] = exported
+        return exported
+    end
+
+    if type(loadstring) ~= "function" then
+        error("Spectra: loadstring unavailable. Provide SpectraOptions.ModuleResolver for local ModuleScripts.")
+    end
     local ok, source = pcall(function() return game:HttpGet(MODULE_ROOT .. path, true) end)
     if not ok or type(source) ~= "string" or #source < 20 then
         error("Spectra module download failed [" .. path .. "]: " .. tostring(source))

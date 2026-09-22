@@ -33,8 +33,10 @@ return function(ctx)
         enable()
         local distance = math.clamp(settings.ThirdPersonDistance or 8, 2, 24)
         player.CameraMode = Enum.CameraMode.Classic
-        player.CameraMinZoomDistance = distance
+        -- Set a permissive range first so Roblox cannot clamp one endpoint against the other.
+        player.CameraMinZoomDistance = 0.5
         player.CameraMaxZoomDistance = distance
+        player.CameraMinZoomDistance = distance
         local h = humanoid()
         if h then h.CameraOffset = Vector3.new(settings.ThirdPersonShoulder or 0, 0, 0) end
     end

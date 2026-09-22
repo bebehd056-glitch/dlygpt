@@ -88,6 +88,12 @@ return function(ctx)
                 local character, humanoid = alive:IsAlive(player)
                 if character then
                     local candidateParts = parts(character, partMode)
+                    if partMode == "Random" then
+                        for i = #candidateParts, 2, -1 do
+                            local j = math.random(i)
+                            candidateParts[i], candidateParts[j] = candidateParts[j], candidateParts[i]
+                        end
+                    end
                     local best = math.huge
                     for _, part in ipairs(candidateParts) do
                         local value = score(player, humanoid, character, part, origin, forward, currentTarget)

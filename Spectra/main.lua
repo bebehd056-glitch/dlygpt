@@ -46,22 +46,9 @@ local function importModule(path)
 end
 local BRAND_NAME = type(startup.Name) == "string" and string.sub(startup.Name, 1, 24) or "spectra"
 local creatorInputAdapter
-local theme = {
-    Background = Color3.fromRGB(19, 19, 19),
-    Sidebar = Color3.fromRGB(28, 28, 28),
-    Hover = Color3.fromRGB(39, 39, 39),
-    Line = Color3.fromRGB(48, 48, 48),
-    Text = Color3.fromRGB(218, 218, 218),
-    Muted = Color3.fromRGB(115, 115, 115),
-    Accent = Color3.fromRGB(164, 198, 48),
-    Off = Color3.fromRGB(62, 62, 62),
-    Visible = Color3.fromRGB(142, 214, 174),
-    Hidden = Color3.fromRGB(231, 143, 119),
-}
-local palette = {
-    Color3.fromRGB(160, 200, 236), Color3.fromRGB(145, 213, 177),
-    Color3.fromRGB(233, 151, 143), Color3.fromRGB(229, 200, 137),
-}
+local skeetStyle = importModule("ui/skeet.lua")
+local theme = skeetStyle.Theme
+local palette = skeetStyle.Palette
 local defaults = {
     Enabled = true, Names = true, Distance = true, Boxes = true, Health = true,
     Skeleton = false, Tracers = false, Highlights = true, TeamCheck = false,
@@ -369,7 +356,7 @@ local function showPage(name)
         end
     end
 end
-for index,name in ipairs({"RAGE","LEGIT","ANTI-AIM","VISUALS","EFFECTS","MISC","CONFIG"}) do
+for index,name in ipairs(skeetStyle.Tabs) do
     local key=name
     local tab=button(sidebar,"",0,(index-1)*71,66,71)
     tab.Name=name

@@ -1,0 +1,145 @@
+-- SPECTRA target selection + multipoint scan
+
+return function(ctx)
+    local Players = assert(ctx.Players, "Targeting: Players missing")
+    local localPlayer = assert(ctx.LocalPlayer, "Targeting: LocalPlayer missing")
+    local settings = assert(ctx.Settings, "Targeting: Settings missing")
+    local alive = assert(ctx.Alive, "Targeting: Alive missing")
+    local visibility = assert(ctx.Visibility, "Targeting: Visibility missing")
+    local isTeammate = assert(ctx.IsTeammate, "Targeting: IsTeammate missing")
+    local getLocalHead = assert(ctx.GetLocalHead, "Targeting: GetLocalHead missing")
+    local adapter = ctx.Adapter
+
+    local function withinFOV(forward, delta)
+        local magnitude = delta.Magnitude
+        if magnitude < 0.05 then return false end
+        if settings.AimFOV >= 359.5 then return true end
+        return forward:Dot(delta / magnitude) >= math.cos(math.rad(settings.AimFOV * 0.5))
+    end
+
+    local function parts(character, mode)
+        if adapter then return adapter:GetAimParts(character, mode or settings.AimPart) end
+        local result = {}
+        local head = character:FindFirstChild("Head")
+        local upper = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+        local lower = character:FindFirstChild("LowerTorso")
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local selected = mode or settings.AimPart
+        local function add(part) if part and part:IsA("BasePart") then result[#result + 1] = part end end
+        if selected == "Голова" or selected == "Head" then add(head); return result end
+        if selected == "Корпус" or selected == "Torso" then add(upper or lower or root); add(lower); return result end
+        add(head); add(upper); add(lower); add(root)
+        return result
+    end
+
+    local function score(player, humanoid, character, part, origin, forward, currentTarget)
+        local delta = part.Position - origin
+        local distance = delta.Magnitude
+        if distance < 0.05 or distance > settings.AimDistance or not withinFOV(forward, delta) then
+            return nil
+        end
+        local value
+        if settings.TargetPriority == "Ближайший" then
+            value = distance / math.max(settings.AimDistance, 1)
+        elseif settings.TargetPriority == "Мало HP" then
+            local health, maximum
+            if adapter then health, maximum = adapter:GetHealth(character) end
+            health = health or humanoid.Health
+            maximum = maximum or humanoid.MaxHealth
+            value = health / math.max(maximum, 1)
+        else
+            value = 1 - math.clamp(forward:Dot(delta / distance), -1, 1)
+        end
+        if player == currentTarget then
+            value = value * (1 - math.clamp(settings.TargetStickiness or 0, 0, 80) / 100)
+        end
+        return value
+    end
+
+    local function pointVisible(cameraOrigin, pointPart, character, rayParams, requireVisibility)
+        if not requireVisibility then return pointPart.Position end
+        local originMode = settings.AimRayOrigin or "Camera"
+        local cameraPoint
+        if originMode == "Camera" or originMode == "Both" then
+            cameraPoint = visibility:FindVisiblePoint(cameraOrigin, pointPart, character, rayParams)
+            if not cameraPoint then return nil end
+        end
+        if originMode == "Head" or originMode == "Both" then
+            local ownHead = getLocalHead()
+            if not ownHead then return nil end
+            local headPoint = visibility:FindVisiblePoint(ownHead.Position, pointPart, character, rayParams)
+            if not headPoint then return nil end
+            if not cameraPoint then cameraPoint = headPoint end
+        end
+        return cameraPoint
+    end
+
+    local api = {}
+
+    function api:WithinFOV(forward, delta)
+        return withinFOV(forward, delta)
+    end
+
+    function api:Find(camera, rayParams, currentTarget, forceVisibility, partMode)
+        local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
+        local candidates = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= localPlayer and not (settings.AimTeamCheck and isTeammate(player)) then
+                local character, humanoid = alive:IsAlive(player)
+                if character then
+                    local candidateParts = parts(character, partMode)
+                    if partMode == "Random" then
+                        for i = #candidateParts, 2, -1 do
+                            local j = math.random(i)
+                            candidateParts[i], candidateParts[j] = candidateParts[j], candidateParts[i]
+                        end
+                    end
+                    local best = math.huge
+                    for _, part in ipairs(candidateParts) do
+                        local value = score(player, humanoid, character, part, origin, forward, currentTarget)
+                        if value and value < best then best = value end
+                    end
+                    if best < math.huge then
+                        candidates[#candidates + 1] = {
+                            Player = player, Character = character, Humanoid = humanoid,
+                            Parts = candidateParts, Score = best,
+                        }
+                    end
+                end
+            end
+        end
+
+        table.sort(candidates, function(a, b)
+            if a.Score == b.Score then return a.Player.UserId < b.Player.UserId end
+            return a.Score < b.Score
+        end)
+
+        local requireVisibility = forceVisibility or settings.AimWallCheck
+        for _, candidate in ipairs(candidates) do
+            for _, part in ipairs(candidate.Parts) do
+                local delta = part.Position - origin
+                if delta.Magnitude <= settings.AimDistance and withinFOV(forward, delta) then
+                    local point = pointVisible(origin, part, candidate.Character, rayParams, requireVisibility)
+                    if point and withinFOV(forward, point - origin)
+                        and (point - origin).Magnitude <= settings.AimDistance then
+                        return candidate.Player, candidate.Character, part, point
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    function api:ValidatePoint(camera, rayParams, player, expectedCharacter, part, forceVisibility)
+        local character = alive:IsAlive(player, expectedCharacter)
+        if not character or not part or not part:IsDescendantOf(character) then return nil end
+        local delta = part.Position - camera.CFrame.Position
+        if delta.Magnitude > settings.AimDistance or not withinFOV(camera.CFrame.LookVector, delta) then
+            return nil
+        end
+        return pointVisible(camera.CFrame.Position, part, character, rayParams,
+            forceVisibility or settings.AimWallCheck)
+    end
+
+    return api
+end

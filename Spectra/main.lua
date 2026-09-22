@@ -1,22 +1,9 @@
 --[[
-SPECTRA / PLAYER VISUALS v6 — AUTO FIRE + MODERN VISUALS
-Установка: LocalScript в StarterPlayer > StarterPlayerScripts. RightShift — меню, End — выгрузка.
-
-БОЙ УПРОЩЁН:
-• ЛКМ сохранён как основной режим; дополнительно есть Auto Fire по живой видимой цели.
-• ЛКМ/Auto Fire используют один pipeline: 25 мс захват → camera flick → 10 мс → клик → возврат.
-• Auto Fire никогда не кликает в пустоту: только когда найдена живая видимая цель.
-• FOV наведения можно поставить до 360°. Значение 360° разрешает цель в любой стороне от камеры.
-• Перед захватом и непосредственно перед выстрелом повторно проверяются Humanoid, стены и команда.
-• После смерти цель немедленно исключается из ESP/aim; старый Character помечается мёртвым до respawn.
-
-ВИДИМОСТЬ:
-• ESP и silent aim используют одинаковую проверку открытой части головы.
-  Достаточно видимого края/макушки головы — всё тело видеть не нужно.
-• Добавлены head-dot маркеры и анимированный target-focus для текущей цели.
-
-Тайминги 25/10 мс являются целевыми: фактическое выполнение зависит от FPS/планировщика Roblox.
-Скрипт не вызывает серверные RemoteEvent и не содержит логики конкретного оружия.
+SPECTRA v10 — portable SDK / motion aim / world shader stack.
+Insert / RightShift: menu. End: unload. Motion aim: Hold RMB or Always.
+Client-only. Weapon activation depends on the selected local input adapter.
+Silent flicks only around the input call and restores the camera in the same render step.
+Death is latched per Character; only a new Character resets the latch.
 ]]
 
 local Players = game:GetService("Players")
@@ -41,22 +28,40 @@ if oldGui then
     oldGui:Destroy()
 end
 
-local theme = {
-    Background = Color3.fromRGB(18, 20, 23),
-    Sidebar = Color3.fromRGB(22, 24, 28),
-    Hover = Color3.fromRGB(31, 35, 40),
-    Line = Color3.fromRGB(43, 47, 53),
-    Text = Color3.fromRGB(231, 234, 238),
-    Muted = Color3.fromRGB(139, 147, 158),
-    Accent = Color3.fromRGB(163, 195, 181),
-    Off = Color3.fromRGB(56, 61, 70),
-    Visible = Color3.fromRGB(142, 214, 174),
-    Hidden = Color3.fromRGB(231, 143, 119),
-}
-local palette = {
-    Color3.fromRGB(160, 200, 236), Color3.fromRGB(145, 213, 177),
-    Color3.fromRGB(233, 151, 143), Color3.fromRGB(229, 200, 137),
-}
+local startup = type(_G.SpectraOptions) == "table" and _G.SpectraOptions or {}
+local MODULE_ROOT = type(startup.ModuleRoot) == "string" and startup.ModuleRoot
+    or "https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/main/Spectra/"
+local moduleCache = {}
+local moduleResolver = type(startup.ModuleResolver) == "function" and startup.ModuleResolver or nil
+local function importModule(path)
+    if moduleCache[path] then return moduleCache[path] end
+
+    if moduleResolver then
+        local ok, exported = pcall(moduleResolver, path)
+        if not ok then error("Spectra ModuleResolver failed [" .. path .. "]: " .. tostring(exported)) end
+        if exported == nil then error("Spectra ModuleResolver returned nil [" .. path .. "]") end
+        moduleCache[path] = exported
+        return exported
+    end
+
+    if type(loadstring) ~= "function" then
+        error("Spectra: loadstring unavailable. Provide SpectraOptions.ModuleResolver for local ModuleScripts.")
+    end
+    local ok, source = pcall(function() return game:HttpGet(MODULE_ROOT .. path, true) end)
+    if not ok or type(source) ~= "string" or #source < 20 then
+        error("Spectra module download failed [" .. path .. "]: " .. tostring(source))
+    end
+    local chunk, compileError = loadstring(source, "@Spectra/" .. path)
+    if not chunk then error("Spectra module compile failed [" .. path .. "]: " .. tostring(compileError)) end
+    local exported = chunk()
+    moduleCache[path] = exported
+    return exported
+end
+local BRAND_NAME = type(startup.Name) == "string" and string.sub(startup.Name, 1, 24) or "spectra"
+local creatorInputAdapter
+local skeetStyle = importModule("ui/skeet.lua")
+local theme = skeetStyle.Theme
+local palette = skeetStyle.Palette
 local defaults = {
     Enabled = true, Names = true, Distance = true, Boxes = true, Health = true,
     Skeleton = false, Tracers = false, Highlights = true, TeamCheck = false,
@@ -68,17 +73,117 @@ local defaults = {
     LookLength = 9,
     SilentAim = true, AutoFire = false, AimTeamCheck = true, AimFOV = 360,
     AimDistance = 1500, AimPart = "Видимая",
+    AimEnabled = false, AimSmooth = 16, TargetPriority = "Прицел",
+    TargetStickiness = 20, AcquireMS = 25, ShotMS = 10, HoldMS = 25,
+    FireInterval = 120, FireMethod = "VirtualUser", AimWallCheck = true,
+    AntiAim = false, AntiMode = "Jitter", AntiYaw = 180,
+    AntiJitter = 55, AntiSpeed = 180, AntiPeriod = 120,
+    AimRayOrigin = "Camera", VisibilitySampling = "Dense",
+    AliveHealthCheck = true, AliveStateCheck = true, AliveAncestryCheck = true,
+    AliveRootCheck = true, AliveDeadTags = true,
+    AliveRagdollCheck = true, AliveRagdollConfirmMS = 220,
+    ThirdPerson = false, ThirdPersonDistance = 8, ThirdPersonShoulder = 0,
+    BulletTracers = true, HitLogs = true, HitMarker = true, HitFlash = true,
+    HitLogDuration = 2.5, TracerDuration = 0.35,
+    AutoFireSource = "Auto",
+    MotionAimSpeed = 240, MotionAimPart = "Visible", MotionRandomization = 18,
+    MotionRandomRefreshMS = 140, MotionFireTolerance = 1.25, MotionActivation = "Hold RMB",
+    ChamsEnabled = false, ChamsThroughWalls = true, ChamsFill = 36, ChamsOutline = 88,
+    ChamsPulse = false, ChamsPulseSpeed = 1.2, ChamsColorMode = "Accent", ChamsRainbowSpeed = 0.12,
+    WorldLightingMode = "Game", AuroraSky = false, AuroraIntensity = 55, AuroraSpeed = 0.5,
+    ColorWorld = false, WorldTint = "Aurora", WorldTintStrength = 35,
+    WorldSaturation = 0, WorldContrast = 0, WorldBrightness = 0,
+    WorldFog = false, FogDensity = 0.3, FogOffset = 0, FogHaze = 1.5, FogGlare = 0, FogColor = "Blue",
+    WorldBloom = false, BloomIntensity = 1, BloomSize = 24, BloomThreshold = 1,
+    WorldBlur = false, BlurSize = 4,
+    WorldSunRays = false, SunRaysIntensity = 0.08, SunRaysSpread = 0.85,
+    WorldDOF = false, DOFFarIntensity = 0.15, DOFNearIntensity = 0,
+    DOFFocusDistance = 60, DOFInFocusRadius = 45,
     HeadMarker = true, TargetFocus = true, DeathShatter = true,
 }
+local settingRanges = {
+    MaxDistance={100,3000}, FillOpacity={0,100}, OutlineOpacity={0,100}, Thickness={1,3},
+    PulseSpeed={0.4,2.4}, ColorIndex={1,4}, RadarRange={50,1000}, LookLength={3,24},
+    AimFOV={5,360}, AimDistance={50,3000}, AimSmooth={2,40}, TargetStickiness={0,50},
+    AcquireMS={0,100}, ShotMS={0,100}, HoldMS={10,100}, FireInterval={60,1000},
+    AntiYaw={-180,180}, AntiJitter={0,120}, AntiSpeed={30,720}, AntiPeriod={50,500},
+    ThirdPersonDistance={2,24}, ThirdPersonShoulder={-4,4},
+    HitLogDuration={0.5,8}, TracerDuration={0.08,1.5},
+    MotionAimSpeed={30,1080}, MotionRandomization={0,100}, MotionRandomRefreshMS={20,1000},
+    MotionFireTolerance={0.1,12},
+    ChamsFill={0,100}, ChamsOutline={0,100}, ChamsPulseSpeed={0.2,5}, ChamsRainbowSpeed={0.02,1},
+    AuroraIntensity={5,100}, AuroraSpeed={0.05,3},
+    WorldTintStrength={0,100}, WorldSaturation={-100,100}, WorldContrast={-100,100}, WorldBrightness={-100,100},
+    FogDensity={0,1}, FogOffset={-1,1}, FogHaze={0,10}, FogGlare={0,10},
+    BloomIntensity={0,4}, BloomSize={0,56}, BloomThreshold={0,2}, BlurSize={0,24},
+    SunRaysIntensity={0,1}, SunRaysSpread={0,1},
+    DOFFarIntensity={0,1}, DOFNearIntensity={0,1}, DOFFocusDistance={1,500}, DOFInFocusRadius={0,250},
+    AliveRagdollConfirmMS={80,600},
+}
+local settingChoices = {
+    BoxStyle={"Углы","Рамка"}, HighlightStyle={"Мягкий","Плотный","Контур","Пульс"},
+    AimPart={"Голова","Корпус","Видимая"}, TargetPriority={"Прицел","Ближайший","Мало HP"},
+    FireMethod={"VirtualUser","MouseButton","Creator"}, AntiMode={"Назад","Jitter","Spin"},
+    AimRayOrigin={"Camera","Head","Both"}, VisibilitySampling={"Fast","Balanced","Dense"},
+    AutoFireSource={"Auto","Silent","Motion"}, MotionAimPart={"Head","Torso","Visible","Random"},
+    MotionActivation={"Hold RMB","Always"},
+    ChamsColorMode={"Accent","Health","Team","Rainbow"},
+    WorldLightingMode={"Game","Fullbright","Night","Sunset","Aurora"},
+    WorldTint={"Aurora","Blue","Purple","Green","Red","Gold","Mono"},
+    FogColor={"Aurora","Blue","Purple","Green","Red","Gold","Mono"},
+}
+local function normalizeSetting(key,value)
+    if defaults[key] == nil or type(value) ~= type(defaults[key]) then return nil,"Unknown setting or wrong type" end
+    if type(value) == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then return nil,"Number must be finite" end
+        local range = settingRanges[key]
+        if range then value = math.clamp(value,range[1],range[2]) end
+        if key == "ColorIndex" then value = math.floor(value+0.5) end
+    elseif type(value) == "string" then
+        local found = false
+        for _,option in ipairs(settingChoices[key] or {}) do if value == option then found=true break end end
+        if not found then return nil,"Unknown choice" end
+    end
+    return value
+end
 local settings = {}
-for key, value in pairs(defaults) do settings[key] = value end
+for key,value in pairs(defaults) do settings[key]=value end
+if type(startup.Settings) == "table" then
+    for key,value in pairs(startup.Settings) do
+        local normalized = normalizeSetting(key,value)
+        if normalized ~= nil then settings[key]=normalized end
+    end
+end
+if type(startup.InputAdapter) == "table" and type(startup.InputAdapter.Press) == "function"
+    and type(startup.InputAdapter.Release) == "function" then
+    creatorInputAdapter = {Press=startup.InputAdapter.Press,Release=startup.InputAdapter.Release}
+end
 local alive, menuOpen = true, true
 local connections, visuals, refreshers = {}, {}, {}
 local activeTweens = setmetatable({}, {__mode = "k"})
 local metadataDue, statsDue = 0, 0
-local profileName = "Тактический"
+local profileName = "Tactical"
 local cleanup
 local deadCharacters = setmetatable({}, {__mode = "k"})
+local GameAdapter = importModule("core/game_adapter.lua")({
+    Players = Players,
+    LocalPlayer = localPlayer,
+    Startup = startup,
+})
+local Alive = importModule("core/alive.lua")({
+    Players = Players,
+    Settings = settings,
+    DeadCharacters = deadCharacters,
+    Adapter = GameAdapter,
+})
+local Visibility = importModule("core/visibility.lua")({
+    Settings = settings,
+    Workspace = workspace,
+})
+
+local function liveCharacter(player, expected)
+    return Alive:IsAlive(player, expected)
+end
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -96,7 +201,7 @@ local function corner(parent, radius)
 end
 local function stroke(parent, color, transparency)
     return new("UIStroke", {Color = color or theme.Line, Thickness = 1,
-        Transparency = transparency or 0}, parent)
+        Transparency = transparency or 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, parent)
 end
 local function tween(item, properties, duration)
     if activeTweens[item] then activeTweens[item]:Cancel() end
@@ -109,7 +214,7 @@ local function label(parent, text, x, y, width, height, size, color, font)
     return new("TextLabel", {
         BackgroundTransparency = 1, BorderSizePixel = 0,
         Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, height),
-        Text = text, Font = font or Enum.Font.Gotham, TextSize = size or 12,
+        Text = text, Font = font or Enum.Font.Arial, TextSize = size or 12,
         TextColor3 = color or theme.Text, TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
     }, parent)
@@ -118,18 +223,21 @@ local function button(parent, text, x, y, width, height)
     return new("TextButton", {
         Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, height),
         BackgroundColor3 = theme.Sidebar, BorderSizePixel = 0, AutoButtonColor = false,
-        Text = text, TextSize = 12, Font = Enum.Font.GothamMedium, TextColor3 = theme.Text,
+        Text = text, TextSize = 11, Font = Enum.Font.Arial, TextColor3 = theme.Text,
     }, parent)
 end
 local function refreshUI()
     for _, refresh in ipairs(refreshers) do refresh() end
 end
 local function setSetting(key, value)
-    if settings[key] == value then return end
-    settings[key] = value
-    profileName = "Свои настройки"
+    local normalized, reason = normalizeSetting(key,value)
+    if normalized == nil then return false,reason end
+    if settings[key] == normalized then return true end
+    settings[key] = normalized
+    profileName = "Custom"
     metadataDue = 0
     refreshUI()
+    return true
 end
 
 local gui = new("ScreenGui", {
@@ -140,6 +248,29 @@ local gui = new("ScreenGui", {
 local shutdown = new("BindableEvent", {Name = "Shutdown"}, gui)
 local overlay = new("Frame", {Name = "Overlay", BackgroundTransparency = 1,
     Size = UDim2.fromScale(1, 1), ClipsDescendants = true, ZIndex = 1}, gui)
+
+local telemetry = importModule("visuals/telemetry.lua")({
+    Settings = settings,
+    Overlay = overlay,
+    Theme = theme,
+    TweenService = TweenService,
+})
+local thirdPerson = importModule("camera/thirdperson.lua")({
+    LocalPlayer = localPlayer,
+    Settings = settings,
+})
+local chams = importModule("visuals/chams.lua")({
+    Players = Players,
+    LocalPlayer = localPlayer,
+    Settings = settings,
+    Alive = Alive,
+    Adapter = GameAdapter,
+    Theme = theme,
+})
+local environment = importModule("world/environment.lua")({
+    Settings = settings,
+    Workspace = workspace,
+})
 
 -- One line owns a sharp core and a faint, wider halo. No scene-wide post processing.
 local function newLine(parent)
@@ -174,269 +305,613 @@ local function drawLine(line, a, b, color, thickness, glow)
     end
 end
 
--- Menu: restrained typography, four tabs, flat rows, no external assets.
-local MENU_W, MENU_H = 562, 516
-local menu = new("CanvasGroup", {Name = "Menu", Size = UDim2.fromOffset(MENU_W, MENU_H),
-    Position = UDim2.fromOffset(28, 100), BackgroundColor3 = theme.Background,
-    BorderSizePixel = 0, GroupTransparency = 0, ZIndex = 20}, gui)
-corner(menu, 9)
-stroke(menu)
+-- Compact classic menu geometry. Kept asset-free and reskinnable.
+local layout = skeetStyle.Layout or {}
+local MENU_W, MENU_H = layout.Width or 820, layout.Height or 610
+local SIDE_W = layout.SidebarWidth or 132
+local HEADER_H = layout.HeaderHeight or 34
+local FOOTER_H = layout.FooterHeight or 24
+
+local menu = new("CanvasGroup", {
+    Name = "Menu",
+    Size = UDim2.fromOffset(MENU_W, MENU_H),
+    Position = UDim2.fromOffset(30, 82),
+    BackgroundColor3 = Color3.fromRGB(8, 9, 10),
+    BorderSizePixel = 1,
+    BorderColor3 = Color3.fromRGB(1, 1, 1),
+    GroupTransparency = 0,
+    ZIndex = 20,
+}, gui)
 local menuScale = new("UIScale", {Scale = 1}, menu)
-local header = new("Frame", {BackgroundTransparency = 1, Active = true,
-    Size = UDim2.new(1, -46, 0, 68)}, menu)
-for i = 1, 3 do
-    new("Frame", {Position = UDim2.fromOffset(20 + (i - 1) * 5, 24 + (3 - i) * 3),
-        Size = UDim2.fromOffset(2, 12 + (i - 1) * 3), BackgroundColor3 = theme.Accent,
-        BorderSizePixel = 0}, header)
+
+local function flatFrame(parent, x, y, w, h, color)
+    return new("Frame", {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(w, h),
+        BackgroundColor3 = color,
+        BorderSizePixel = 0,
+    }, parent)
 end
-label(header, "SPECTRA", 45, 17, 175, 23, 17, theme.Text, Enum.Font.GothamMedium)
-label(header, "PLAYER VISUALS  /  03", 45, 39, 180, 14, 9, theme.Muted)
-local master = button(header, "", 384, 22, 103, 26)
-corner(master, 4)
+
+-- layered 1px borders instead of rounded cards / glass
+local rim = flatFrame(menu, 1, 1, MENU_W - 2, MENU_H - 2, Color3.fromRGB(50, 52, 54))
+local shell = flatFrame(rim, 1, 1, MENU_W - 4, MENU_H - 4, Color3.fromRGB(10, 11, 12))
+local surface = flatFrame(shell, 2, 2, MENU_W - 8, MENU_H - 8, theme.Background)
+stroke(surface, theme.Line)
+
+-- restrained top accent
+local topAccent = flatFrame(menu, 5, 5, MENU_W - 10, 2, theme.Accent)
+local accentFade = new("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, theme.Accent),
+        ColorSequenceKeypoint.new(0.55, theme.Accent),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(26, 88, 43)),
+    }),
+}, topAccent)
+
+local header = new("Frame", {
+    Name = "DragHandle",
+    BackgroundTransparency = 1,
+    Active = true,
+    Position = UDim2.fromOffset(10, 9),
+    Size = UDim2.fromOffset(MENU_W - 20, HEADER_H),
+}, menu)
+
+local brand = label(header, string.upper(BRAND_NAME), 10, 4, SIDE_W - 18, 17, 14, theme.Text, Enum.Font.ArialBold)
+brand.TextWrapped = false
+label(header, "v10", SIDE_W - 24, 6, 28, 14, 9, theme.Accent, Enum.Font.ArialBold)
+
+local build = label(menu, "PRIVATE BUILD", 20, 31, SIDE_W - 24, 14, 9, theme.Muted, Enum.Font.Code)
+build.TextTransparency = 0.18
+
+local master = button(header, "", MENU_W - 160, 4, 105, 18)
+master.BackgroundTransparency = 1
 master.Modal = true
+master.TextSize = 10
 local function updateMaster()
-    master.Text = settings.Enabled and "ESP  ·  ВКЛ" or "ESP  ·  ВЫКЛ"
+    master.Text = settings.Enabled and "ESP  [ON]" or "ESP  [OFF]"
     master.TextColor3 = settings.Enabled and theme.Accent or theme.Muted
 end
 refreshers[#refreshers + 1] = updateMaster
 connect(master.Activated, function() setSetting("Enabled", not settings.Enabled) end)
-local closeButton = button(menu, "−", MENU_W - 48, 20, 30, 30)
+
+local closeButton = button(menu, "×", MENU_W - 31, 12, 18, 18)
 closeButton.BackgroundTransparency = 1
-closeButton.TextSize = 23
-new("Frame", {Position = UDim2.fromOffset(16, 67), Size = UDim2.new(1, -32, 0, 1),
-    BackgroundColor3 = theme.Line, BorderSizePixel = 0}, menu)
-local sidebar = new("Frame", {Position = UDim2.fromOffset(0, 68),
-    Size = UDim2.new(0, 124, 1, -102), BackgroundColor3 = theme.Sidebar, BorderSizePixel = 0}, menu)
-local footer = label(menu, "", 17, MENU_H - 28, MENU_W - 34, 18, 10, theme.Muted)
-local pages, tabs = {}, {}
-local tabNames = {"ESP", "Эффекты", "Навигация", "Бой", "Профили"}
-local activePage = "ESP"
-local contentW = MENU_W - 156
+closeButton.TextSize = 16
+closeButton.TextColor3 = theme.Muted
+
+local sidebarY = 50
+local sidebarH = MENU_H - sidebarY - FOOTER_H - 9
+local sidebar = flatFrame(menu, 8, sidebarY, SIDE_W, sidebarH, theme.Sidebar)
+flatFrame(menu, 8 + SIDE_W, sidebarY, 1, sidebarH, theme.Line)
+
+local footer = label(menu, "", 16, MENU_H - FOOTER_H - 3, MENU_W - 32, 16, 9, theme.Muted, Enum.Font.Code)
+local footerHint
+local function hintOn(item, text)
+    if not text then return end
+    connect(item.MouseEnter, function() footerHint = text end)
+    connect(item.MouseLeave, function() if footerHint == text then footerHint = nil end end)
+end
+
+local pages, tabs, tabIndicators, tabLabels = {}, {}, {}, {}
+local activePage = "RAGE"
+local pageX = SIDE_W + 23
+local pageW = MENU_W - pageX - 14
+local columnGap = 10
+local contentW = math.floor((pageW - columnGap) / 2)
+local columns, currentGroups = {}, {}
+local dropdownClose
+
+local function closeDropdown()
+    if dropdownClose then
+        local close = dropdownClose
+        dropdownClose = nil
+        close()
+    end
+end
+
 local function showPage(name)
+    closeDropdown()
     activePage = name
-    for tabName, page in pairs(pages) do
-        page.Visible = tabName == name
-        tabs[tabName].TextColor3 = tabName == name and theme.Text or theme.Muted
-        tabs[tabName].BackgroundTransparency = tabName == name and 0 or 1
+    footerHint = nil
+    for key, page in pairs(pages) do
+        local selected = key == name
+        page.Visible = selected
+        tabs[key].BackgroundColor3 = selected and Color3.fromRGB(22, 27, 23) or theme.Sidebar
+        tabLabels[key].TextColor3 = selected and theme.Text or Color3.fromRGB(154, 160, 169)
+        tabIndicators[key].Visible = selected
     end
 end
-for index, name in ipairs(tabNames) do
-    local tabName = name
-    local tab = button(sidebar, string.format("%02d  %s", index, name), 10, 16 + (index - 1) * 40, 104, 32)
-    tab.TextSize = 11
-    tab.BackgroundColor3 = theme.Hover
-    corner(tab, 4)
+
+for index, name in ipairs(skeetStyle.Tabs) do
+    local key = name
+    local tabY = 26 + (index - 1) * 43
+    local tab = button(sidebar, "", 0, tabY, SIDE_W, 42)
+    tab.Name = name
+    tab.BackgroundColor3 = theme.Sidebar
     tabs[name] = tab
-    local page = new("ScrollingFrame", {Name = name, Position = UDim2.fromOffset(140, 81),
-        Size = UDim2.fromOffset(contentW, MENU_H - 129), BackgroundTransparency = 1,
-        BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = theme.Off,
-        CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollingDirection = Enum.ScrollingDirection.Y, Visible = false}, menu)
-    new("UIListLayout", {Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder}, page)
-    new("UIPadding", {PaddingBottom = UDim.new(0, 8), PaddingRight = UDim.new(0, 7)}, page)
+
+    local indicator = flatFrame(tab, 0, 0, 2, 42, theme.Accent)
+    indicator.Visible = false
+    tabIndicators[name] = indicator
+
+    local caption = label(tab, name, 17, 12, SIDE_W - 24, 18, 11, theme.Muted, Enum.Font.Arial)
+    tabLabels[name] = caption
+    hintOn(tab, name)
+
+    local page = new("Frame", {
+        Name = name,
+        Position = UDim2.fromOffset(pageX, 48),
+        Size = UDim2.fromOffset(pageW, MENU_H - 76),
+        BackgroundTransparency = 1,
+        Visible = false,
+    }, menu)
     pages[name] = page
-    connect(tab.Activated, function() showPage(tabName) end)
-end
-label(sidebar, "LOCAL\nR6 / R15", 21, 343, 89, 40, 10, theme.Muted)
+    columns[name] = {}
 
-local order = 0
-local function row(pageName, height)
-    order = order + 1
-    return new("Frame", {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, height),
-        LayoutOrder = order}, pages[pageName])
-end
-local function divider(parent, height)
-    new("Frame", {Position = UDim2.new(0, 0, 0, height - 1), Size = UDim2.new(1, -2, 0, 1),
-        BackgroundColor3 = theme.Line, BackgroundTransparency = 0.45, BorderSizePixel = 0}, parent)
-end
-local function section(pageName, titleText, description)
-    local item = row(pageName, description and 57 or 34)
-    label(item, titleText, 0, 5, contentW - 12, 21, 14, theme.Text, Enum.Font.GothamMedium)
-    if description then label(item, description, 0, 28, contentW - 12, 18, 10, theme.Muted) end
-end
-local function toggle(pageName, titleText, key, hint)
-    local item = row(pageName, hint and 52 or 41)
-    local hit = button(item, "", 0, 0, contentW - 8, hint and 51 or 40)
-    hit.BackgroundTransparency = 1
-    label(hit, titleText, 0, hint and 7 or 10, contentW - 69, 19, 12)
-    if hint then label(hit, hint, 0, 27, contentW - 65, 16, 10, theme.Muted) end
-    local pill = new("Frame", {AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -4, 0.5, 0), Size = UDim2.fromOffset(30, 16),
-        BorderSizePixel = 0, BackgroundColor3 = theme.Off}, hit)
-    corner(pill, 8)
-    local dot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5),
-        Size = UDim2.fromOffset(10, 10), BackgroundColor3 = theme.Text, BorderSizePixel = 0}, pill)
-    corner(dot, 5)
-    local function refresh()
-        tween(pill, {BackgroundColor3 = settings[key] and theme.Accent or theme.Off})
-        tween(dot, {Position = UDim2.new(settings[key] and 1 or 0, settings[key] and -8 or 8, 0.5, 0)})
+    for col = 1, 2 do
+        local column = new("ScrollingFrame", {
+            Name = "Column" .. col,
+            Position = UDim2.fromOffset((col - 1) * (contentW + columnGap), 0),
+            Size = UDim2.fromOffset(contentW, MENU_H - 82),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 1,
+            ScrollBarImageColor3 = theme.Accent,
+            ScrollBarImageTransparency = 0.45,
+            CanvasSize = UDim2.fromOffset(0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            ScrollingDirection = Enum.ScrollingDirection.Y,
+        }, page)
+        new("UIListLayout", {
+            Padding = UDim.new(0, layout.GroupGap or 10),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }, column)
+        new("UIPadding", {
+            PaddingTop = UDim.new(0, 5),
+            PaddingLeft = UDim.new(0, 1),
+            PaddingBottom = UDim.new(0, 8),
+            PaddingRight = UDim.new(0, 4),
+        }, column)
+        columns[name][col] = column
+        connect(column:GetPropertyChangedSignal("CanvasPosition"), closeDropdown)
     end
-    refreshers[#refreshers + 1] = refresh
-    connect(hit.Activated, function() setSetting(key, not settings[key]) end)
-    connect(hit.MouseEnter, function() tween(hit, {BackgroundTransparency = 0.45}) end)
-    connect(hit.MouseLeave, function() tween(hit, {BackgroundTransparency = 1}) end)
-    divider(item, hint and 52 or 41)
+
+    connect(tab.Activated, function() showPage(key) end)
 end
+
+label(sidebar, "SPECTRA v10", 17, sidebarH - 49, SIDE_W - 28, 14, 9, theme.Muted, Enum.Font.Code)
+label(sidebar, "BUILT DIFFERENT", 17, sidebarH - 33, SIDE_W - 28, 14, 8, Color3.fromRGB(84, 91, 98), Enum.Font.Code)
+
+local order=0
+local function section(pageName,titleText,column)
+    order=order+1
+    local group=new("Frame",{
+        Name=titleText,
+        BackgroundColor3=Color3.fromRGB(16,17,18),
+        BorderSizePixel=1,
+        BorderColor3=Color3.fromRGB(4,4,4),
+        Size=UDim2.fromOffset(contentW,25),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        LayoutOrder=order,
+    },columns[pageName][column or 1])
+    stroke(group,Color3.fromRGB(46,49,51))
+
+    local title=label(group,titleText,9,-7,contentW-18,14,10,theme.Text,Enum.Font.Arial)
+    title.AutomaticSize=Enum.AutomaticSize.X
+    title.Size=UDim2.fromOffset(0,14)
+    title.BackgroundTransparency=0
+    title.BackgroundColor3=Color3.fromRGB(16,17,18)
+    title.ZIndex=3
+
+    local marker=flatFrame(group,6,-2,3,3,theme.Accent)
+    marker.ZIndex=4
+
+    local body=new("Frame",{
+        Name="Body",
+        Position=UDim2.fromOffset(10,14),
+        Size=UDim2.fromOffset(contentW-20,0),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        BackgroundTransparency=1,
+    },group)
+    new("UIListLayout",{Padding=UDim.new(0,1),SortOrder=Enum.SortOrder.LayoutOrder},body)
+    new("UIPadding",{PaddingBottom=UDim.new(0,9)},body)
+    currentGroups[pageName]=body
+    return group
+end
+
+local function row(pageName,height)
+    order=order+1
+    return new("Frame",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,height),
+        LayoutOrder=order,
+    },currentGroups[pageName])
+end
+
+local function shade(parent,top,bottom)
+    new("UIGradient",{Rotation=90,Color=ColorSequence.new(top,bottom)},parent)
+end
+
+local function toggle(pageName,titleText,key,hint)
+    local item=row(pageName,18)
+    local hit=button(item,"",0,0,contentW-20,18)
+    hit.BackgroundTransparency=1
+
+    local box=flatFrame(hit,1,4,9,9,Color3.fromRGB(38,40,42))
+    box.BorderSizePixel=1
+    box.BorderColor3=Color3.fromRGB(2,2,2)
+
+    local inner=flatFrame(box,2,2,5,5,theme.Accent)
+    local textLabel=label(hit,titleText,17,0,contentW-43,17,10,theme.Text,Enum.Font.Arial)
+
+    refreshers[#refreshers+1]=function()
+        inner.Visible=settings[key] == true
+        box.BackgroundColor3=settings[key] and Color3.fromRGB(24,38,27) or Color3.fromRGB(38,40,42)
+        textLabel.TextColor3=settings[key] and theme.Text or Color3.fromRGB(181,186,192)
+    end
+
+    hintOn(hit,hint)
+    connect(hit.Activated,function() setSetting(key,not settings[key]) end)
+end
+
 local sliderDrag
-local function slider(pageName, titleText, key, minimum, maximum, step, unit)
-    local item = row(pageName, 70)
-    label(item, titleText, 0, 8, contentW - 114, 18, 12)
-    local valueLabel = label(item, "", contentW - 112, 8, 96, 18, 11, theme.Muted, Enum.Font.Code)
-    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
-    local trackHit = button(item, "", 3, 34, contentW - 24, 24)
-    trackHit.BackgroundTransparency = 1
-    local track = new("Frame", {Position = UDim2.new(0, 0, 0.5, -1),
-        Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = theme.Off, BorderSizePixel = 0}, trackHit)
-    local fill = new("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = theme.Accent, BorderSizePixel = 0}, track)
-    local dot = new("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(8, 8),
-        BackgroundColor3 = theme.Text, BorderSizePixel = 0}, trackHit)
-    corner(dot, 4)
+local function slider(pageName,titleText,key,minimum,maximum,step,unit)
+    local item=row(pageName,30)
+    local titleLabel=label(item,titleText,17,0,contentW-108,14,10,Color3.fromRGB(188,194,201),Enum.Font.Arial)
+    local valueLabel=label(item,"",contentW-91,0,68,14,9,theme.Text,Enum.Font.Code)
+    valueLabel.TextXAlignment=Enum.TextXAlignment.Right
+
+    local hit=button(item,"",17,16,contentW-40,12)
+    hit.BackgroundTransparency=1
+    local track=flatFrame(hit,0,3,contentW-40,4,Color3.fromRGB(39,42,44))
+    track.BorderSizePixel=1
+    track.BorderColor3=Color3.fromRGB(3,3,3)
+    local fill=flatFrame(track,0,0,0,4,theme.Accent)
+    local knob=flatFrame(hit,0,1,4,8,theme.Accent)
+
     local function fromX(x)
-        local percent = math.clamp((x - trackHit.AbsolutePosition.X) / math.max(trackHit.AbsoluteSize.X, 1), 0, 1)
-        local value = minimum + math.floor(percent * (maximum - minimum) / step + 0.5) * step
-        setSetting(key, math.clamp(value, minimum, maximum))
+        local p=math.clamp((x-hit.AbsolutePosition.X)/math.max(hit.AbsoluteSize.X,1),0,1)
+        local value=minimum+math.floor(p*(maximum-minimum)/step+0.5)*step
+        setSetting(key,math.clamp(value,minimum,maximum))
     end
-    refreshers[#refreshers + 1] = function()
-        local percent = (settings[key] - minimum) / (maximum - minimum)
-        fill.Size = UDim2.fromScale(percent, 1)        dot.Position = UDim2.new(percent, 0, 0.5, 0)
-        valueLabel.Text = string.format(step < 1 and "%.1f%s" or "%.0f%s", settings[key], unit or "")
+
+    refreshers[#refreshers+1]=function()
+        local p=math.clamp((settings[key]-minimum)/(maximum-minimum),0,1)
+        fill.Size=UDim2.fromScale(p,1)
+        knob.Position=UDim2.new(p,-2,0,1)
+        local format=step < 0.1 and "%.2f%s" or (step < 1 and "%.1f%s" or "%.0f%s")
+        valueLabel.Text=string.format(format,settings[key],unit or "")
     end
-    connect(trackHit.InputBegan, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDrag = {Input = input, Update = fromX}
+
+    connect(hit.InputBegan,function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            closeDropdown()
+            sliderDrag={Input=input,Update=fromX}
             fromX(input.Position.X)
-        elseif input.KeyCode == Enum.KeyCode.Left or input.KeyCode == Enum.KeyCode.Right then
-            setSetting(key, math.clamp(settings[key] + (input.KeyCode == Enum.KeyCode.Right and step or -step), minimum, maximum))
         end
     end)
-    divider(item, 70)
-end
-local function choices(pageName, titleText, key, options)
-    local item = row(pageName, 73)
-    label(item, titleText, 0, 5, contentW - 12, 21, 12)
-    local buttons = {}
-    local width = (contentW - 16 - (#options - 1) * 5) / #options
-    for i, option in ipairs(options) do
-        local value = option
-        local hit = button(item, option, (i - 1) * (width + 5), 33, width, 26)
-        hit.TextSize = 10
-        corner(hit, 3)
-        buttons[option] = hit
-        connect(hit.Activated, function() setSetting(key, value) end)
-    end
-    refreshers[#refreshers + 1] = function()
-        for value, hit in pairs(buttons) do
-            hit.BackgroundColor3 = settings[key] == value and theme.Hover or theme.Sidebar
-            hit.TextColor3 = settings[key] == value and theme.Accent or theme.Muted
-        end
-    end
-    divider(item, 73)
 end
 
-section("ESP", "Игроки", "Всё нужное — рядом с моделью.")
-toggle("ESP", "Ники игроков", "Names")
-toggle("ESP", "Расстояние", "Distance")
-toggle("ESP", "Боксы", "Boxes")
-choices("ESP", "Форма бокса", "BoxStyle", {"Углы", "Рамка"})
-toggle("ESP", "Полоса здоровья", "Health")
-toggle("ESP", "Скелет R6 / R15", "Skeleton")
-toggle("ESP", "Линии до игроков", "Tracers")
-toggle("ESP", "Предмет в руках", "Tool", "Название экипированного Tool")
-toggle("ESP", "Скрывать союзников", "TeamCheck")
-toggle("ESP", "Только видимые", "OnlyVisible", "Достаточно видимого края/макушки головы")
-slider("ESP", "Максимальная дистанция", "MaxDistance", 100, 3000, 50, " st")
-section("Эффекты", "Свет и контур", "Мягкий ореол, спокойная палитра.")
-toggle("Эффекты", "Подсветка модели", "Highlights")
-choices("Эффекты", "Стиль подсветки", "HighlightStyle", {"Мягкий", "Плотный", "Контур", "Пульс"})
-toggle("Эффекты", "Ореол у линий", "Glow")
-slider("Эффекты", "Плотность заливки", "FillOpacity", 0, 100, 1, "%")
-slider("Эффекты", "Яркость контура", "OutlineOpacity", 0, 100, 1, "%")
-slider("Эффекты", "Толщина линий", "Thickness", 1, 3, 0.5, " px")
-slider("Эффекты", "Скорость пульса", "PulseSpeed", 0.4, 2.4, 0.1, " Hz")
-toggle("Эффекты", "Цвет по видимости", "VisibilityColors", "Зелёный: виден · терракотовый: за препятствием")
-toggle("Эффекты", "Цвета команд", "TeamColors", "Используются, когда выключен цвет по видимости")
-toggle("Эффекты", "Метка головы", "HeadMarker", "Мини-точка на реально видимой части головы")
-toggle("Эффекты", "Фокус текущей цели", "TargetFocus", "Анимированные углы вокруг цели silent/auto fire")
+local displayOptions={
+    ["Голова"]="Head",["Корпус"]="Body",["Видимая"]="Visible point",
+    ["Прицел"]="Crosshair",["Ближайший"]="Distance",["Мало HP"]="Lowest health",
+    ["Назад"]="Backward",["Углы"]="Corners",["Рамка"]="Full box",
+    ["Мягкий"]="Soft",["Плотный"]="Solid",["Контур"]="Outline",["Пульс"]="Pulse",
+}
+
+local function choices(pageName,titleText,key,options)
+    local item=row(pageName,36)
+    label(item,titleText,17,0,contentW-40,14,10,Color3.fromRGB(188,194,201),Enum.Font.Arial)
+
+    local hit=button(item,"",17,16,contentW-40,17)
+    hit.BorderSizePixel=1
+    hit.BorderColor3=Color3.fromRGB(3,3,3)
+    hit.BackgroundColor3=Color3.fromRGB(24,25,27)
+
+    local valueLabel=label(hit,"",6,0,contentW-67,16,9,theme.Text,Enum.Font.Arial)
+    local arrow=label(hit,"▾",contentW-61,0,12,16,9,theme.Muted,Enum.Font.Arial)
+    arrow.TextXAlignment=Enum.TextXAlignment.Center
+
+    refreshers[#refreshers+1]=function()
+        valueLabel.Text=displayOptions[settings[key]] or settings[key]
+    end
+
+    connect(hit.MouseEnter,function() hit.BackgroundColor3=Color3.fromRGB(29,31,32) end)
+    connect(hit.MouseLeave,function() hit.BackgroundColor3=Color3.fromRGB(24,25,27) end)
+
+    connect(hit.Activated,function()
+        local wasOpen=hit:GetAttribute("DropdownOpen")
+        closeDropdown()
+        if wasOpen then return end
+
+        sliderDrag=nil
+        hit:SetAttribute("DropdownOpen",true)
+
+        local shield=button(gui,"",0,0,0,0)
+        shield.Name="DropdownShield"
+        shield.Size=UDim2.fromScale(1,1)
+        shield.BackgroundTransparency=1
+        shield.ZIndex=80
+
+        local scale=menuScale.Scale
+        local optionHeight=19
+        local h=#options*optionHeight*scale
+        local x,y=hit.AbsolutePosition.X,hit.AbsolutePosition.Y+hit.AbsoluteSize.Y+1
+        local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+        if viewport and y+h>viewport.Y-8 then y=hit.AbsolutePosition.Y-h-1 end
+
+        local popup=new("Frame",{
+            Name="Dropdown",
+            Position=UDim2.fromOffset(x,math.max(8,y)),
+            Size=UDim2.fromOffset(hit.AbsoluteSize.X,h),
+            BackgroundColor3=Color3.fromRGB(18,19,20),
+            BorderSizePixel=1,
+            BorderColor3=Color3.fromRGB(3,3,3),
+            ZIndex=81,
+        },shield)
+        stroke(popup,Color3.fromRGB(50,53,55))
+
+        local popupConnections={}
+        dropdownClose=function()
+            hit:SetAttribute("DropdownOpen",false)
+            for _,connection in ipairs(popupConnections) do connection:Disconnect() end
+            shield:Destroy()
+        end
+
+        popupConnections[#popupConnections+1]=shield.Activated:Connect(closeDropdown)
+
+        for i,option in ipairs(options) do
+            local value=option
+            local choice=button(popup,displayOptions[option] or option,0,(i-1)*optionHeight*scale,hit.AbsoluteSize.X,optionHeight*scale)
+            choice.TextSize=math.max(8,9*scale)
+            choice.TextXAlignment=Enum.TextXAlignment.Left
+            choice.ZIndex=82
+            choice.TextColor3=settings[key]==option and theme.Accent or theme.Text
+            choice.BackgroundColor3=Color3.fromRGB(18,19,20)
+            local pad=new("UIPadding",{PaddingLeft=UDim.new(0,6)},choice)
+            popupConnections[#popupConnections+1]=choice.Activated:Connect(function()
+                setSetting(key,value)
+                closeDropdown()
+            end)
+            popupConnections[#popupConnections+1]=choice.MouseEnter:Connect(function()
+                choice.BackgroundColor3=Color3.fromRGB(28,31,29)
+            end)
+            popupConnections[#popupConnections+1]=choice.MouseLeave:Connect(function()
+                choice.BackgroundColor3=Color3.fromRGB(18,19,20)
+            end)
+        end
+    end)
+end
+
+section("RAGE","Aimbot",1)
+toggle("RAGE","Enabled","SilentAim","Silent: поворот камеры → нажатие → отпускание → возврат")
+toggle("RAGE","Automatic fire","AutoFire","Работает с Silent или Motion aim")
+choices("RAGE","Auto fire aim","AutoFireSource",{"Auto","Silent","Motion"})
+toggle("RAGE","Check team","AimTeamCheck")
+toggle("RAGE","Visibility check","AimWallCheck","Multipoint raycast по реально видимым частям")
+choices("RAGE","Ray origin","AimRayOrigin",{"Camera","Head","Both"})
+choices("RAGE","Multipoint sampling","VisibilitySampling",{"Fast","Balanced","Dense"})
+choices("RAGE","Target selection","TargetPriority",{"Прицел","Ближайший","Мало HP"})
+choices("RAGE","Target hitbox","AimPart",{"Голова","Корпус","Видимая"})
+slider("RAGE","Maximum FOV","AimFOV",5,360,5,"°")
+slider("RAGE","Maximum distance","AimDistance",50,3000,50," st")
+slider("RAGE","Target retention","TargetStickiness",0,50,5,"%")
+section("RAGE","Input",2)
+choices("RAGE","Fire method","FireMethod",{"VirtualUser","MouseButton","Creator"})
+slider("RAGE","Acquire delay","AcquireMS",0,100,5," ms")
+slider("RAGE","Camera settle time","ShotMS",0,100,5," ms")
+slider("RAGE","Press duration","HoldMS",10,100,5," ms")
+slider("RAGE","Automatic fire interval","FireInterval",60,1000,10," ms")
+section("RAGE","Target visuals",2)
+toggle("RAGE","Target focus","TargetFocus")
+toggle("RAGE","Head marker","HeadMarker")
+toggle("RAGE","Death particles","DeathShatter")
+
+section("LEGIT","Motion aim",1)
+toggle("LEGIT","Enabled","AimEnabled","Прицел физически ведётся к цели с ограниченной угловой скоростью")
+choices("LEGIT","Activation","MotionActivation",{"Hold RMB","Always"})
+slider("LEGIT","Aim speed","MotionAimSpeed",30,1080,15,"°/s")
+choices("LEGIT","Body selection","MotionAimPart",{"Head","Torso","Visible","Random"})
+slider("LEGIT","Randomization","MotionRandomization",0,100,5,"%")
+slider("LEGIT","Random refresh","MotionRandomRefreshMS",20,1000,20," ms")
+slider("LEGIT","Auto-fire tolerance","MotionFireTolerance",0.1,12,0.1,"°")
+slider("LEGIT","Maximum FOV","AimFOV",5,360,5,"°")
+slider("LEGIT","Maximum distance","AimDistance",50,3000,50," st")
+section("LEGIT","Target selection",2)
+choices("LEGIT","Priority","TargetPriority",{"Прицел","Ближайший","Мало HP"})
+toggle("LEGIT","Check team","AimTeamCheck")
+toggle("LEGIT","Visibility check","AimWallCheck")
+slider("LEGIT","Target retention","TargetStickiness",0,50,5,"%")
+
+section("ANTI-AIM","Anti-aimbot angles",1)
+toggle("ANTI-AIM","Enabled","AntiAim","Поворачивает персонажа; репликация зависит от плейса")
+choices("ANTI-AIM","Yaw mode","AntiMode",{"Назад","Jitter","Spin"})
+slider("ANTI-AIM","Yaw offset","AntiYaw",-180,180,5,"°")
+section("ANTI-AIM","Modifiers",2)
+slider("ANTI-AIM","Jitter range","AntiJitter",0,120,5,"°")
+slider("ANTI-AIM","Jitter interval","AntiPeriod",50,500,10," ms")
+slider("ANTI-AIM","Spin speed","AntiSpeed",30,720,30,"°/s")
+
+section("VISUALS","Player ESP",1)
+toggle("VISUALS","Enabled","Enabled")
+toggle("VISUALS","Player name","Names")
+toggle("VISUALS","Bounding box","Boxes")
+choices("VISUALS","Box style","BoxStyle",{"Углы","Рамка"})
+toggle("VISUALS","Health bar","Health")
+toggle("VISUALS","Skeleton","Skeleton")
+toggle("VISUALS","Weapon text","Tool")
+toggle("VISUALS","Distance","Distance")
+toggle("VISUALS","Tracers","Tracers")
+section("VISUALS","Filters",2)
+toggle("VISUALS","Ignore teammates","TeamCheck")
+toggle("VISUALS","Visible only","OnlyVisible")
+slider("VISUALS","Maximum distance","MaxDistance",100,3000,50," st")
+section("VISUALS","Extra",2)
+toggle("VISUALS","Offscreen arrows","Arrows")
+toggle("VISUALS","Look direction","LookDirection")
+slider("VISUALS","Look length","LookLength",3,24,1," st")
+toggle("VISUALS","Velocity vector","Velocity")
+
+section("EFFECTS","Player glow",1)
+toggle("EFFECTS","Enabled","Highlights")
+choices("EFFECTS","Glow style","HighlightStyle",{"Мягкий","Плотный","Контур","Пульс"})
+slider("EFFECTS","Fill opacity","FillOpacity",0,100,1,"%")
+slider("EFFECTS","Outline opacity","OutlineOpacity",0,100,1,"%")
+toggle("EFFECTS","Line glow","Glow")
+slider("EFFECTS","Line thickness","Thickness",1,3,0.5," px")
+slider("EFFECTS","Pulse speed","PulseSpeed",0.4,2.4,0.1," Hz")
+section("EFFECTS","Chams",1)
+toggle("EFFECTS","Enabled","ChamsEnabled")
+toggle("EFFECTS","Through walls","ChamsThroughWalls")
+choices("EFFECTS","Color mode","ChamsColorMode",{"Accent","Health","Team","Rainbow"})
+slider("EFFECTS","Fill","ChamsFill",0,100,1,"%")
+slider("EFFECTS","Outline","ChamsOutline",0,100,1,"%")
+toggle("EFFECTS","Pulse","ChamsPulse")
+slider("EFFECTS","Pulse speed","ChamsPulseSpeed",0.2,5,0.1," Hz")
+slider("EFFECTS","Rainbow speed","ChamsRainbowSpeed",0.02,1,0.02,"")
+section("EFFECTS","Colors",2)
+toggle("EFFECTS","Visibility colors","VisibilityColors")
+toggle("EFFECTS","Team colors","TeamColors")
 do
-    local item = row("Эффекты", 62)
-    label(item, "Основной цвет", 0, 6, 180, 19, 12)
-    for i, color in ipairs(palette) do
-        local colorIndex = i
-        local hit = button(item, "", (i - 1) * 42, 30, 32, 22)
-        hit.BackgroundColor3 = color
-        corner(hit, 3)
-        local border = stroke(hit, theme.Text, 1)
-        refreshers[#refreshers + 1] = function() border.Transparency = settings.ColorIndex == colorIndex and 0 or 1 end
-        connect(hit.Activated, function() setSetting("ColorIndex", colorIndex) end)
+    local item=row("EFFECTS",42)
+    label(item,"ESP color",20,0,150,16,11)
+    for i,color in ipairs(palette) do
+        local index=i
+        local hit=button(item,"",20+(i-1)*42,22,32,12)
+        hit.BackgroundColor3=color
+        local border=stroke(hit,theme.Text)
+        refreshers[#refreshers+1]=function() border.Transparency=settings.ColorIndex==index and 0 or 0.8 end
+        connect(hit.Activated,function() setSetting("ColorIndex",index) end)
     end
 end
-section("Навигация", "Ориентация", "Радар поворачивается вместе с камерой.")
-toggle("Навигация", "Радар", "Radar", "Игроки за пределами радиуса — на краю круга")
-slider("Навигация", "Радиус радара", "RadarRange", 50, 1000, 25, " st")
-toggle("Навигация", "Стрелки за экраном", "Arrows")
-toggle("Навигация", "Направление головы", "LookDirection", "Линия показывает поворот Head")
-slider("Навигация", "Длина линии взгляда", "LookLength", 3, 24, 1, " st")
-toggle("Навигация", "Движение и скорость", "Velocity", "Вектор движения + скорость в studs/сек")
+section("EFFECTS","Indicators",2)
+toggle("EFFECTS","Head marker","HeadMarker")
+toggle("EFFECTS","Bullet tracers","BulletTracers")
+toggle("EFFECTS","Hit marker","HitMarker")
+toggle("EFFECTS","Hit logs","HitLogs")
+toggle("EFFECTS","Hit flash shader","HitFlash")
+slider("EFFECTS","Tracer lifetime","TracerDuration",0.08,1.5,0.01," s")
+slider("EFFECTS","Hitlog lifetime","HitLogDuration",0.5,8,0.25," s")
+toggle("EFFECTS","Target focus","TargetFocus")
+toggle("EFFECTS","Death particles","DeathShatter")
 
-section("Бой", "Silent aim + Auto Fire", "Один pipeline: 25 мс поиск → flick → 10 мс → клик → возврат")
-toggle("Бой", "Silent aim", "SilentAim", "ЛКМ использует silent-пайплайн; видимость перепроверяется перед выстрелом")
-toggle("Бой", "Автовыстрел", "AutoFire", "Сам стреляет только когда есть живая видимая цель")
-slider("Бой", "FOV наведения", "AimFOV", 5, 360, 5, "°")
-choices("Бой", "Точка попадания", "AimPart", {"Голова", "Корпус", "Видимая"})
-toggle("Бой", "Не стрелять в союзников", "AimTeamCheck")
-section("Бой", "Эффект смерти", "Мёртвый игрок сразу удаляется из ESP и выбора цели")
-toggle("Бой", "Рассыпание модели", "DeathShatter", "Локальный VFX; на aim/ESP не влияет")
+section("MISC","Camera",1)
+toggle("MISC","Third person","ThirdPerson")
+slider("MISC","Third person distance","ThirdPersonDistance",2,24,1," st")
+slider("MISC","Shoulder offset","ThirdPersonShoulder",-4,4,0.5," st")
 
-local combatKeys = {
-    SilentAim=true, AutoFire=true, AimTeamCheck=true, AimFOV=true, AimDistance=true,
-    AimPart=true, HeadMarker=true, TargetFocus=true, DeathShatter=true,
+section("MISC","World",1)
+choices("MISC","Lighting mode","WorldLightingMode",{"Game","Fullbright","Night","Sunset","Aurora"})
+toggle("MISC","Aurora ribbons","AuroraSky","Процедурное полярное сияние без внешних skybox assets")
+slider("MISC","Aurora intensity","AuroraIntensity",5,100,5,"%")
+slider("MISC","Aurora speed","AuroraSpeed",0.05,3,0.05,"")
+
+section("MISC","Radar",2)
+toggle("MISC","Enabled","Radar")
+slider("MISC","Radar range","RadarRange",50,1000,25," st")
+
+section("MISC","Color world / fog",2)
+toggle("MISC","Color world","ColorWorld")
+choices("MISC","World tint","WorldTint",{"Aurora","Blue","Purple","Green","Red","Gold","Mono"})
+slider("MISC","Tint strength","WorldTintStrength",0,100,5,"%")
+slider("MISC","Saturation","WorldSaturation",-100,100,5,"%")
+slider("MISC","Contrast","WorldContrast",-100,100,5,"%")
+slider("MISC","Brightness","WorldBrightness",-100,100,5,"%")
+toggle("MISC","Atmosphere fog","WorldFog")
+choices("MISC","Fog tint","FogColor",{"Aurora","Blue","Purple","Green","Red","Gold","Mono"})
+slider("MISC","Fog density","FogDensity",0,1,0.05,"")
+slider("MISC","Fog offset","FogOffset",-1,1,0.05,"")
+slider("MISC","Fog haze","FogHaze",0,10,0.25,"")
+slider("MISC","Fog glare","FogGlare",0,10,0.25,"")
+
+section("MISC","Post processing",2)
+toggle("MISC","Bloom","WorldBloom")
+slider("MISC","Bloom intensity","BloomIntensity",0,4,0.1,"")
+slider("MISC","Bloom size","BloomSize",0,56,1,"")
+slider("MISC","Bloom threshold","BloomThreshold",0,2,0.05,"")
+toggle("MISC","Blur","WorldBlur")
+slider("MISC","Blur size","BlurSize",0,24,1,"")
+toggle("MISC","Sun rays","WorldSunRays")
+slider("MISC","Sun rays intensity","SunRaysIntensity",0,1,0.02,"")
+slider("MISC","Sun rays spread","SunRaysSpread",0,1,0.02,"")
+toggle("MISC","Depth of field","WorldDOF")
+slider("MISC","DOF far","DOFFarIntensity",0,1,0.05,"")
+slider("MISC","DOF near","DOFNearIntensity",0,1,0.05,"")
+slider("MISC","Focus distance","DOFFocusDistance",1,500,5," st")
+slider("MISC","In-focus radius","DOFInFocusRadius",0,250,5," st")
+
+section("MISC","Interface",2)
+do
+    local item=row("MISC",62)
+    label(item,"Menu  [ INS / RightShift ]",20,0,contentW-44,18,11)
+    label(item,"Unload  [ END ]",20,21,contentW-44,18,11)
+    label(item,"Aim  [ hold MOUSE2 ]",20,42,contentW-44,18,11)
+end
+local combatKeys={SilentAim=true,AutoFire=true,AimTeamCheck=true,AimFOV=true,AimDistance=true,
+    AimPart=true,HeadMarker=true,TargetFocus=true,DeathShatter=true,AimEnabled=true,AimSmooth=true,
+    TargetPriority=true,TargetStickiness=true,AcquireMS=true,ShotMS=true,HoldMS=true,FireInterval=true,
+    FireMethod=true,AimWallCheck=true,AimRayOrigin=true,VisibilitySampling=true,
+    AntiAim=true,AntiMode=true,AntiYaw=true,AntiJitter=true,AntiSpeed=true,AntiPeriod=true,
+    AliveHealthCheck=true,AliveStateCheck=true,AliveAncestryCheck=true,AliveRootCheck=true,AliveDeadTags=true,
+    AliveRagdollCheck=true,AliveRagdollConfirmMS=true,
+    ThirdPerson=true,ThirdPersonDistance=true,ThirdPersonShoulder=true,
+    BulletTracers=true,HitLogs=true,HitMarker=true,HitFlash=true,HitLogDuration=true,TracerDuration=true,
+    AutoFireSource=true,MotionAimSpeed=true,MotionAimPart=true,MotionRandomization=true,
+    MotionRandomRefreshMS=true,MotionFireTolerance=true,MotionActivation=true,
+    ChamsEnabled=true,ChamsThroughWalls=true,ChamsFill=true,ChamsOutline=true,ChamsPulse=true,
+    ChamsPulseSpeed=true,ChamsColorMode=true,ChamsRainbowSpeed=true,
+    WorldLightingMode=true,AuroraSky=true,AuroraIntensity=true,AuroraSpeed=true,
+    ColorWorld=true,WorldTint=true,WorldTintStrength=true,WorldSaturation=true,WorldContrast=true,WorldBrightness=true,
+    WorldFog=true,FogDensity=true,FogOffset=true,FogHaze=true,FogGlare=true,FogColor=true,
+    WorldBloom=true,BloomIntensity=true,BloomSize=true,BloomThreshold=true,WorldBlur=true,BlurSize=true,
+    WorldSunRays=true,SunRaysIntensity=true,SunRaysSpread=true,WorldDOF=true,DOFFarIntensity=true,
+    DOFNearIntensity=true,DOFFocusDistance=true,DOFInFocusRadius=true}
+local profiles={
+    {Name="Clean",Values={Boxes=false,Distance=false,Radar=false,Arrows=false,VisibilityColors=false,Tool=false,HighlightStyle="Контур",Glow=false}},
+    {Name="Tactical",Values={}},
+    {Name="Detailed",Values={Skeleton=true,Tracers=true,LookDirection=true,Velocity=true,HighlightStyle="Пульс"}},
 }
-local profiles = {
-    {Name = "Чистый", Description = "Имена, здоровье, мягкий контур. Меньше деталей.",
-        Values = {Boxes = false, Distance = false, Radar = false, Arrows = false,
-            VisibilityColors = false, Tool = false, HighlightStyle = "Контур", Glow = false}},
-    {Name = "Тактический", Description = "Углы, видимость, предметы, радар и стрелки.", Values = {}},
-    {Name = "Подробный", Description = "Все слои ESP, скелет, взгляд и движение.",
-        Values = {Skeleton = true, Tracers = true, LookDirection = true, Velocity = true,
-            HighlightStyle = "Пульс"}},
-}
-section("Профили", "Готовые пресеты", "Применяются сразу. Настройки — на текущую сессию.")
-for _, profile in ipairs(profiles) do
-    local preset = profile
-    local item = row("Профили", 83)
-    local hit = button(item, "", 0, 7, contentW - 10, 66)
-    corner(hit, 5)
-    local border = stroke(hit)
-    label(hit, profile.Name, 12, 10, contentW - 50, 21, 13, theme.Text, Enum.Font.GothamMedium)
-    label(hit, profile.Description, 12, 36, contentW - 39, 18, 10, theme.Muted)
-    refreshers[#refreshers + 1] = function()
-        border.Color = profileName == preset.Name and theme.Accent or theme.Line
-    end
-    connect(hit.Activated, function()
-        for key, value in pairs(defaults) do
-            if not combatKeys[key] then settings[key] = value end
-        end
-        for key, value in pairs(preset.Values) do settings[key] = value end
-        profileName = preset.Name
-        metadataDue = 0
-        refreshUI()
+section("CONFIG","Alive checks",1)
+toggle("CONFIG","Health > 0","AliveHealthCheck")
+toggle("CONFIG","Humanoid state","AliveStateCheck")
+toggle("CONFIG","Workspace ancestry","AliveAncestryCheck")
+toggle("CONFIG","Head + root exist","AliveRootCheck")
+toggle("CONFIG","Dead/Alive attributes","AliveDeadTags")
+toggle("CONFIG","Ragdoll / corpse posture","AliveRagdollCheck","Мягкая проверка: state + PlatformStand + наклон тела + высота головы")
+slider("CONFIG","Ragdoll confirm","AliveRagdollConfirmMS",80,600,20," ms")
+section("CONFIG","Visual presets",2)
+for _,profile in ipairs(profiles) do
+    local preset=profile
+    local item=row("CONFIG",29)
+    local hit=button(item,profile.Name,20,2,contentW-58,23)
+    hit.BorderSizePixel=1; hit.BorderColor3=Color3.new(0,0,0)
+    shade(hit,Color3.fromRGB(60,60,60),Color3.fromRGB(33,33,33))
+    hit.BackgroundColor3=Color3.new(1,1,1)
+    refreshers[#refreshers+1]=function() hit.TextColor3=profileName==preset.Name and theme.Accent or theme.Text end
+    connect(hit.Activated,function()
+        for key,value in pairs(defaults) do if not combatKeys[key] then settings[key]=value end end
+        for key,value in pairs(preset.Values) do settings[key]=value end
+        profileName=preset.Name; metadataDue=0; refreshUI()
     end)
 end
-local unloadRow = row("Профили", 59)
-local unload = button(unloadRow, "Выгрузить Spectra", 0, 15, contentW - 10, 32)
-unload.TextColor3 = theme.Muted
-corner(unload, 4)
-connect(unload.Activated, function() if cleanup then cleanup() end end)
+section("CONFIG","Session",2)
+local unloadRow=row("CONFIG",29)
+local unload=button(unloadRow,"Unload",20,2,contentW-58,23)
+unload.BorderSizePixel=1; unload.BorderColor3=Color3.new(0,0,0)
+connect(unload.Activated,function() if cleanup then cleanup() end end)
 
-local launcher = button(gui, "VISUALS", 22, 65, 88, 29)
+
+local launcher = button(gui, BRAND_NAME, 22, 65, 88, 24)
 launcher.Name = "OpenMenu"
 launcher.ZIndex = 30
 launcher.TextSize = 10
-corner(launcher, 5)
-stroke(launcher)
+stroke(launcher, theme.Line)
 local menuTransition = 0
 local function setMenuOpen(open)
     menuOpen = open
+    closeDropdown()
+    footerHint = nil
     master.Modal = open
     menuTransition = menuTransition + 1
     local generation = menuTransition
@@ -489,6 +964,7 @@ local function clampMenu()
         math.clamp(menu.Position.Y.Offset, safeTop, math.max(safeTop, viewport.Y - size.Y - 8)))
 end
 local function updateLayout(viewport)
+    closeDropdown()
     lastViewport = viewport
     local inset = GuiService:GetGuiInset()
     safeTop = math.max(10, inset.Y + 8)
@@ -501,6 +977,7 @@ end
 local menuDrag
 connect(header.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        closeDropdown()
         menuDrag = {Input = input, Start = Vector2.new(input.Position.X, input.Position.Y), Position = menu.Position}
     end
 end)
@@ -521,7 +998,7 @@ end)
 connect(UserInputService.WindowFocusReleased, function() sliderDrag = nil menuDrag = nil end)
 connect(UserInputService.InputBegan, function(input, processed)
     if processed or UserInputService:GetFocusedTextBox() then return end
-    if input.KeyCode == Enum.KeyCode.RightShift then setMenuOpen(not menuOpen)
+    if input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then setMenuOpen(not menuOpen)
     elseif input.KeyCode == Enum.KeyCode.End then if cleanup then cleanup() end end
 end)
 
@@ -600,7 +1077,7 @@ local function removePlayer(player)
     visuals[player] = nil
 end
 local function isTeammate(player)
-    return not localPlayer.Neutral and not player.Neutral and localPlayer.Team ~= nil and player.Team == localPlayer.Team
+    return GameAdapter:IsTeammate(player)
 end
 local function getColor(data)
     if settings.VisibilityColors and data.VisibleToCamera ~= nil then
@@ -612,16 +1089,16 @@ end
 -- Cache body bounds and rig connections at ~7 Hz, leaving projection smooth each frame.
 -- Accessory/Tool parts are excluded so held items cannot inflate the body box.
 local function cacheCharacter(data)
-    local character = data.Player.Character
+    local character = GameAdapter:GetCharacter(data.Player)
     if data.Character ~= character then
         releaseHighlight(data)
         data.Character = character
         data.VisibleToCamera = nil
         data.RayDue = 0
     end
-    data.Root = character and character:FindFirstChild("HumanoidRootPart")
-    data.Head = character and character:FindFirstChild("Head")
-    data.Humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    data.Root = character and GameAdapter:GetRoot(character)
+    data.Head = character and GameAdapter:GetHead(character)
+    data.Humanoid = character and GameAdapter:GetHumanoid(character)
     if not data.Root or not data.Root:IsA("BasePart") or not data.Head or not data.Head:IsA("BasePart") or not data.Humanoid then
         data.Eligible = false
         return
@@ -645,8 +1122,7 @@ local function cacheCharacter(data)
     for index, pair in ipairs(rig) do data.BonePairs[index] = {data.Parts[pair[1]], data.Parts[pair[2]]} end
     local tool = character:FindFirstChildOfClass("Tool")
     data.ToolName = tool and tool.Name or ""
-    data.Eligible = not deadCharacters[character]
-        and data.Humanoid.Health > 0 and character:IsDescendantOf(workspace)
+    data.Eligible = liveCharacter(data.Player, character) ~= nil
 end
 local function updateMetadata(camera, origin, now)
     local candidates = {}
@@ -675,41 +1151,40 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 local rayBudget = 0
 local function headSamplePoints(head)
-    local sx = math.max(0.08, head.Size.X * 0.42)
-    local sy = math.max(0.08, head.Size.Y * 0.42)
-    local sz = math.max(0.08, head.Size.Z * 0.34)
-    local cf = head.CFrame
-    return {
-        head.Position,
-        cf:PointToWorldSpace(Vector3.new(0, sy, 0)),
-        cf:PointToWorldSpace(Vector3.new(-sx, 0, 0)),
-        cf:PointToWorldSpace(Vector3.new(sx, 0, 0)),
-        cf:PointToWorldSpace(Vector3.new(0, 0, -sz)),
-        cf:PointToWorldSpace(Vector3.new(0, 0, sz)),
-    }
+    return Visibility:SamplePart(head)
 end
 local function updateVisibility(data, camera, now)
     if not settings.VisibilityColors and not settings.OnlyVisible and not settings.HeadMarker then return end
     if now < data.RayDue or rayBudget < 1 then return end
+
     local start = camera.CFrame.Position
-    local function clearPoint(point)
-        if rayBudget < 1 then return false end
-        rayBudget = rayBudget - 1
-        local result = workspace:Raycast(start, point - start, rayParams)
-        return not result or result.Instance:IsDescendantOf(data.Character)
-    end
+    local scanParts = {
+        data.Head,
+        data.Parts.UpperTorso or data.Parts.Torso,
+        data.Parts.LowerTorso,
+        data.Parts["Left Arm"] or data.Parts.LeftUpperArm,
+        data.Parts["Right Arm"] or data.Parts.RightUpperArm,
+        data.Parts["Left Leg"] or data.Parts.LeftUpperLeg,
+        data.Parts["Right Leg"] or data.Parts.RightUpperLeg,
+    }
     local visible = false
-    for _, point in ipairs(headSamplePoints(data.Head)) do
-        if clearPoint(point) then
-            visible = true
-            break
+    for _, part in ipairs(scanParts) do
+        if part and part.Parent then
+            for _, point in ipairs(Visibility:SamplePart(part)) do
+                if rayBudget < 1 then break end
+                rayBudget = rayBudget - 1
+                if Visibility:Clear(start, point, data.Character, rayParams) then
+                    visible = true
+                    break
+                end
+            end
         end
+        if visible or rayBudget < 1 then break end
     end
-    if not visible and rayBudget > 0 then
-        visible = clearPoint(data.Root.Position)
-    end
+
     data.VisibleToCamera = visible
-    data.RayDue = now + 0.10 + (math.abs(data.Player.UserId) % 5) * 0.006
+    data.RayDue = now + (settings.VisibilitySampling == "Dense" and 0.045 or 0.07)
+        + (math.abs(data.Player.UserId) % 5) * 0.004
 end
 
 -- Clip world segments at the camera near plane before projecting them.
@@ -786,6 +1261,10 @@ local function drawWorldLine(line, camera, a, b, color)
     if first then drawLine(line, first, second, color) else hideLine(line) end
 end
 local function updateHighlight(data, color, now)
+    if settings.ChamsEnabled then
+        releaseHighlight(data)
+        return
+    end
     if not data.AllowHighlight or not settings.Highlights then return end
     if not data.Highlight then
         data.Highlight = new("Highlight", {Name = "SpectraHighlight", Adornee = data.Character,
@@ -856,10 +1335,15 @@ local function updateRadar(data, camera, origin, color)
     data.RadarDot.BackgroundTransparency = outside and 0.4 or 0
 end
 local function updatePlayer(data, camera, origin, now)
-    if not settings.Enabled or not data.Eligible or data.Player.Character ~= data.Character
-        or not data.Root or not data.Root.Parent or not data.Head or not data.Head.Parent
+    if not settings.Enabled or not data.Eligible or GameAdapter:GetCharacter(data.Player) ~= data.Character
+        or not data.Root or not data.Root:IsDescendantOf(data.Character)
+        or not data.Head or not data.Head:IsDescendantOf(data.Character)
         or deadCharacters[data.Character]
-        or not data.Humanoid or data.Humanoid.Health <= 0 then hide(data) return false end
+        or not liveCharacter(data.Player, data.Character) then
+        hide(data)
+        releaseHighlight(data)
+        return false
+    end
     data.DistanceValue = (data.Root.Position - origin).Magnitude
     if data.DistanceValue > settings.MaxDistance or (settings.TeamCheck and isTeammate(data.Player)) then hide(data) return false end
     updateVisibility(data, camera, now)
@@ -942,10 +1426,12 @@ end
 local function startCombat()
     local controller = {Running = true, Target = nil, Status = "Готов"}
     local ACTION = GUI_NAME .. "_ClickOnlyFire"
-    local ACQUIRE_DELAY = 0.025
-    local SHOT_DELAY = 0.010
-    local TARGET_REFRESH = 0.025
-    local AUTO_FIRE_GAP = 0.085
+    local TARGET_REFRESH = 0.05
+    local PRE_CAMERA = RENDER_NAME .. "_Restore"
+    local syntheticInput, consumedClick = false, false
+    local bindFireAction
+    local inputRebindToken = 0
+    local pressed
     local serviceConnections, watchers = {}, {}
     local candidateDue, autoFireDue = 0, 0
     local currentTarget, currentPart, focused = nil, nil, true
@@ -994,11 +1480,10 @@ local function startCombat()
     combatStatus.ZIndex = 6
 
     local function ownCharacter()
-        local character = localPlayer.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        local head = character and character:FindFirstChild("Head")
-        if not humanoid or humanoid.Health <= 0 or not head or not head:IsA("BasePart") then return nil end
-        return character, head
+        local character, humanoid = liveCharacter(localPlayer)
+        local head = character and GameAdapter:GetHead(character)
+        if not head or not head:IsA("BasePart") then return nil end
+        return character, head, humanoid
     end
     local function blocked()
         return not controller.Running or menuOpen or not focused or GuiService.MenuIsOpen
@@ -1006,120 +1491,193 @@ local function startCombat()
     end
     local function updateFilter(camera)
         local ignored = {camera, debrisFolder}
-        if localPlayer.Character then ignored[#ignored + 1] = localPlayer.Character end
+        local own = GameAdapter:GetCharacter(localPlayer)
+        if own then ignored[#ignored + 1] = own end
         rayParams.FilterDescendantsInstances = ignored
     end
-    local function enemyAlive(player)
+    local function enemyAlive(player, expected)
         if player == localPlayer or (settings.AimTeamCheck and isTeammate(player)) then return false end
-        local character = player.Character
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        return character and not deadCharacters[character] and character:IsDescendantOf(workspace)
-            and humanoid and humanoid.Health > 0 and not character:FindFirstChildOfClass("ForceField")
+        local character = Alive:IsAlive(player, expected)
+        return character ~= nil and not character:FindFirstChildOfClass("ForceField")
     end
-    local function clear(origin, point, character)
-        local delta = point - origin
-        if delta.Magnitude < 0.001 then return true end
-        local result = workspace:Raycast(origin, delta, rayParams)
-        return not result or result.Instance:IsDescendantOf(character)
+
+    local targeting = importModule("combat/targeting.lua")({
+        Players = Players,
+        LocalPlayer = localPlayer,
+        Settings = settings,
+        Alive = Alive,
+        Visibility = Visibility,
+        IsTeammate = isTeammate,
+        GetLocalHead = function()
+            local _, head = ownCharacter()
+            return head
+        end,
+        Adapter = GameAdapter,
+    })
+    local motionAim = importModule("combat/motion_aim.lua")({
+        Settings = settings,
+        Targeting = targeting,
+        Visibility = Visibility,
+        UserInputService = UserInputService,
+    })
+    local antiAim = importModule("combat/antiaim.lua")({
+        Settings = settings,
+        GetCharacter = function()
+            local character, _, humanoid = ownCharacter()
+            return character, humanoid
+        end,
+    })
+
+    local function validPoint(camera, part, character, forceWalls)
+        local player = character and GameAdapter:GetPlayerFromCharacter(character)
+        if not player then return nil end
+        return targeting:ValidatePoint(camera, rayParams, player, character, part, forceWalls)
     end
-    local function visiblePointOnPart(origin, part, character)
-        if not part or not part:IsA("BasePart") then return nil end
-        if part.Name ~= "Head" then
-            return clear(origin, part.Position, character) and part.Position or nil
-        end
-        for _, point in ipairs(headSamplePoints(part)) do
-            if clear(origin, point, character) then return point end
-        end
-        return nil
-    end
-    local function points(character)
-        local head = character:FindFirstChild("Head")
-        local body = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-            or character:FindFirstChild("HumanoidRootPart")
-        local result = {}
-        if settings.AimPart ~= "Корпус" and head and head:IsA("BasePart") then result[#result + 1] = head end
-        if settings.AimPart ~= "Голова" and body and body:IsA("BasePart") then result[#result + 1] = body end
-        return result
-    end
-    local function withinFOV(forward, delta)
-        if settings.AimFOV >= 359.5 then return true end
-        local halfAngle = math.clamp(settings.AimFOV * 0.5, 0.5, 179.5)
-        return forward:Dot(delta.Unit) >= math.cos(math.rad(halfAngle))
-    end
-    local function findTarget(camera)
+
+    local function findTarget(camera, forceWalls, partMode)
         if blocked() then return nil end
-        local ownCharacterModel = ownCharacter()
-        if not ownCharacterModel then return nil end
         updateFilter(camera)
-        local origin, forward = camera.CFrame.Position, camera.CFrame.LookVector
-        local candidates = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            if enemyAlive(player) then
-                local options, score = points(player.Character), math.huge
-                for _, part in ipairs(options) do
-                    local delta = part.Position - origin
-                    local distance = delta.Magnitude
-                    if distance > 0.05 and distance <= settings.AimDistance and withinFOV(forward, delta) then
-                        local value = 1 - forward:Dot(delta / distance)
-                        if player == currentTarget then value = value * 0.85 end
-                        score = math.min(score, value)
-                    end
-                end
-                if score < math.huge then candidates[#candidates + 1] = {Player = player, Points = options, Score = score} end
-            end
-        end
-        table.sort(candidates, function(a, b)
-            if a.Score == b.Score then return a.Player.UserId < b.Player.UserId end
-            return a.Score < b.Score
-        end)
-        for index = 1, math.min(6, #candidates) do
-            local candidate = candidates[index]
-            for _, part in ipairs(candidate.Points) do
-                local delta = part.Position - origin
-                if delta.Magnitude > 0.05 and delta.Magnitude <= settings.AimDistance
-                    and withinFOV(forward, delta) then
-                    local visiblePoint = visiblePointOnPart(origin, part, candidate.Player.Character)
-                    if visiblePoint then
-                        return candidate.Player, part, visiblePoint
-                    end
-                end
-            end
-        end
-        return nil
+        local player, _, part, point = targeting:Find(camera, rayParams, currentTarget, forceWalls, partMode)
+        return player, part, point
     end
+
     local function setTarget(player, part)
         currentTarget, currentPart = player, part
         controller.Target = player
     end
-    local function restoreShot(camera, status)
-        if shot and camera and shot.Camera == camera then camera.CFrame = shot.Original end
+    -- Aim never reads an equipped weapon. The selected input backend is independent.
+    local function resolveInputAdapter(method)
+        if method == "Creator" then
+            if not creatorInputAdapter then return nil, "Creator adapter is not configured" end
+            return creatorInputAdapter
+        end
+        if method == "MouseButton" then
+            if type(mouse1press) ~= "function" or type(mouse1release) ~= "function" then
+                return nil, "MouseButton API is unavailable; select VirtualUser or Creator"
+            end
+            -- Snapshot both functions so release uses the same backend as press.
+            local press, release = mouse1press, mouse1release
+            return {Press=function() press() end, Release=function() release() end}
+        end
+        if method == "VirtualUser" then
+            return {
+                Press=function(context)
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button1Down(context.MousePosition, context.Camera.CFrame)
+                end,
+                Release=function(context)
+                    VirtualUser:Button1Up(context.MousePosition, context.Camera.CFrame)
+                end,
+            }
+        end
+        return nil, "Unknown input method"
+    end
+    local function releaseInput()
+        local input = pressed
+        pressed = nil
+        if not input then return end
+        local wasSynthetic = syntheticInput
+        syntheticInput = true
+        local ok, result, reason = pcall(input.Adapter.Release, input.Context)
+        syntheticInput = wasSynthetic
+        if not ok or result == false then
+            warn("Spectra input release: " .. tostring(ok and reason or result))
+        end
+        if input.Synthetic then
+            inputRebindToken = inputRebindToken + 1
+            local token = inputRebindToken
+            -- Generated mouse events may be delivered after the API call returns.
+            task.delay(0.05, function()
+                if controller.Running and token == inputRebindToken and not pressed and bindFireAction then
+                    bindFireAction()
+                end
+            end)
+        end
+    end
+    local function pressInput(camera)
+        if pressed then return false, "Input is already held" end
+        local adapter, errorMessage = resolveInputAdapter(settings.FireMethod)
+        if not adapter then return false, errorMessage end
+        local context = {
+            Camera=camera, MousePosition=UserInputService:GetMouseLocation(),
+            Target=shot and shot.Player, Character=shot and shot.Character,
+            Part=shot and shot.Part, AimPosition=shot and shot.Point,
+            Automatic=shot and shot.Auto or false,
+        }
+        local input = {Adapter=adapter, Context=context, Synthetic=settings.FireMethod ~= "Creator"}
+        if input.Synthetic then
+            inputRebindToken = inputRebindToken + 1
+            ContextActionService:UnbindAction(ACTION)
+        end
+        pressed = input
+        local wasSynthetic = syntheticInput
+        syntheticInput = true
+        local ok, result, reason = pcall(adapter.Press, context)
+        syntheticInput = wasSynthetic
+        if not ok or result == false then
+            releaseInput()
+            return false, "Input failed: " .. tostring(ok and reason or result)
+        end
+        return true
+    end
+
+    local function restoreShot(_, status)
+        local previous = shot
+        releaseInput()
         shot = nil
+        if previous and previous.Camera and previous.Applied then
+            pcall(function() previous.Camera.CFrame = previous.Base end)
+        end
         if status then controller.Status = status end
     end
-
-    local bindFireAction
-    local function virtualClick(camera)
-        ContextActionService:UnbindAction(ACTION)
-        local position = UserInputService:GetMouseLocation()
-        local downOk, downError = pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(position, camera.CFrame)
-        end)
-        task.delay(0.025, function()
-            pcall(function()
-                local currentCamera = workspace.CurrentCamera
-                VirtualUser:Button1Up(position, currentCamera and currentCamera.CFrame or camera.CFrame)
-            end)
-            if controller.Running then bindFireAction() end
-        end)
-        if not downOk then return false, "Виртуальный ЛКМ недоступен: " .. tostring(downError) end
-        return true, "клик"
+    -- Restore before Roblox's camera controller, so mouse movement during a shot is preserved.
+    RunService:BindToRenderStep(PRE_CAMERA, Enum.RenderPriority.Camera.Value - 1, function()
+        if shot and shot.Applied then
+            shot.Camera.CFrame = shot.Base
+            shot.Applied = false
+        end
+    end)
+    local function restoreAnti()
+        antiAim:Restore()
+    end
+    local function updateAnti(dt, camera, now)
+        local busy = shot or pendingAcquire
+            or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        antiAim:Update(dt, camera, now, blocked() or busy)
+    end
+    local function resolveAutoSource()
+        if not settings.AutoFire then return nil end
+        if settings.AutoFireSource == "Silent" then
+            return settings.SilentAim and "Silent" or nil
+        elseif settings.AutoFireSource == "Motion" then
+            return settings.AimEnabled and "Motion" or nil
+        end
+        if settings.SilentAim then return "Silent" end
+        if settings.AimEnabled then return "Motion" end
+        return nil
     end
 
-    local function beginClick(auto)
-        if pendingAcquire or shot or blocked() then return false end
-        pendingAcquire = {At = os.clock() + ACQUIRE_DELAY, Auto = auto == true}
-        controller.Status = auto and "Auto · поиск цели · 25 ms" or "Поиск цели · 25 ms"
+    local function beginClick(auto, player, part)
+        if pendingAcquire or shot or blocked() or not settings.SilentAim then return false end
+        if auto and os.clock() < autoFireDue then return false end
+        pendingAcquire = {At=os.clock() + settings.AcquireMS / 1000, Auto=auto == true,
+            Player=player, Character=GameAdapter:GetCharacter(player), Part=part}
+        restoreAnti()
+        return true
+    end
+
+    local function beginMotionAuto(camera, player, character, part, aimPoint, now)
+        if pendingAcquire or shot or pressed or blocked() or not settings.AimEnabled
+            or not settings.AutoFire or now < autoFireDue then return false end
+        if not player or not character or not part or not aimPoint then return false end
+        shot = {
+            Camera=camera, Base=camera.CFrame, Player=player, Character=character,
+            Part=part, Point=aimPoint, FireAt=now, Auto=true, NoFlick=true,
+            Phase="Aim", Expires=now + 1,
+        }
+        setTarget(player, part)
+        restoreAnti()
         return true
     end
 
@@ -1127,80 +1685,123 @@ local function startCombat()
         if not pendingAcquire or now < pendingAcquire.At then return end
         local request = pendingAcquire
         pendingAcquire = nil
-        if blocked() then return end
-        local player, part, point = findTarget(camera)
-        if not player then
-            if request.Auto then
-                controller.Status = "Auto · нет видимой цели"
-                return
-            end
-            local fired, reason = virtualClick(camera)
-            controller.Status = fired and "Обычный выстрел · клик" or reason
-            return
-        end
-        if not enemyAlive(player) then return end
-        shot = {Camera = camera, Original = camera.CFrame, Player = player, Part = part,
-            Point = point, FireAt = now + SHOT_DELAY, Auto = request.Auto}
-        camera.CFrame = CFrame.lookAt(shot.Original.Position, point, shot.Original.UpVector)
-        controller.Status = "Цель: " .. player.DisplayName .. " · +10 ms"
+        if blocked() or not settings.SilentAim or (request.Auto and not settings.AutoFire)
+            or not enemyAlive(request.Player, request.Character) then return end
+        updateFilter(camera)
+        local point = request.Part and request.Part:IsDescendantOf(request.Character)
+            and validPoint(camera, request.Part, request.Character, request.Auto)
+        if not point then controller.Status = "Цель потеряна" return end
+        shot = {Camera=camera, Base=camera.CFrame, Player=request.Player, Character=request.Character,
+            Part=request.Part, Point=point, FireAt=now + settings.ShotMS / 1000, Auto=request.Auto,
+            NoFlick=false, Phase="Aim", Expires=now + 1}
+        setTarget(request.Player, request.Part)
     end
 
     local function updateShot(camera, now)
         if not shot then return end
-        if blocked() or camera ~= shot.Camera or not enemyAlive(shot.Player)
-            or not shot.Part or not shot.Part.Parent then
+        local sourceEnabled = (shot.NoFlick and settings.AimEnabled)
+            or ((not shot.NoFlick) and settings.SilentAim)
+        if blocked() or not sourceEnabled or camera ~= shot.Camera or now > shot.Expires
+            or (shot.Auto and not settings.AutoFire) or not enemyAlive(shot.Player, shot.Character)
+            or not shot.Part:IsDescendantOf(shot.Character) then
             restoreShot(camera, "Выстрел отменён")
             return
         end
+
         updateFilter(camera)
-        local point = visiblePointOnPart(shot.Original.Position, shot.Part, shot.Player.Character)
+        local point = validPoint(camera, shot.Part, shot.Character, true)
         if not point then
-            restoreShot(camera, "Стена — отмена")
+            restoreShot(camera, "Цель скрылась / вне FOV")
             return
         end
-        shot.Point = point
-        camera.CFrame = CFrame.lookAt(shot.Original.Position, point, shot.Original.UpVector)
-        if now >= shot.FireAt then
-            if not enemyAlive(shot.Player) then
-                restoreShot(camera, "Цель уже мертва")
+
+        if shot.NoFlick then
+            local motionPlayer, motionCharacter, motionPart, motionPoint = motionAim:GetTarget()
+            if motionPlayer == shot.Player and motionCharacter == shot.Character
+                and motionPart == shot.Part and motionPoint
+                and (motionPoint - shot.Part.Position).Magnitude <= shot.Part.Size.Magnitude + 1 then
+                point = motionPoint
+            end
+            shot.Point = point
+            if not motionAim:IsAligned(camera, point) then return end
+        else
+            shot.Point = point
+        end
+
+        if shot.Phase == "Aim" and now >= shot.FireAt then
+            shot.Base = camera.CFrame
+
+            if not shot.NoFlick then
+                -- Silent: flick only around the input call, then restore in the same render step.
+                camera.CFrame = CFrame.lookAt(shot.Base.Position, point, shot.Base.UpVector)
+                shot.Applied = true
+            end
+
+            telemetry:RecordShot(shot.Player, shot.Character, shot.Part, shot.Base.Position, point)
+            local activeShot = shot
+            local fired, reason = pressInput(camera)
+
+            if not shot.NoFlick and camera == workspace.CurrentCamera then
+                camera.CFrame = shot and shot.Base or camera.CFrame
+            end
+            if shot then shot.Applied = false end
+
+            if shot ~= activeShot then
+                releaseInput()
                 return
             end
-            local fired, reason = virtualClick(camera)
-            local name = shot.Player.DisplayName
-            local wasAuto = shot.Auto
+            if not fired then
+                autoFireDue = now + 0.5
+                restoreShot(camera, reason)
+                return
+            end
+
+            shot.Phase = "Hold"
+            shot.ReleaseAt = now + settings.HoldMS / 1000
+            autoFireDue = now + settings.FireInterval / 1000
+            controller.Status = (shot.NoFlick and "Motion fire: " or "Silent fire: ") .. shot.Player.DisplayName
+        elseif shot.Phase == "Hold" and now >= shot.ReleaseAt then
             restoreShot(camera)
-            if wasAuto then autoFireDue = now + AUTO_FIRE_GAP end
-            controller.Status = fired and ((wasAuto and "Auto: " or "Выстрел: ") .. name .. " · клик") or reason
         end
     end
-
     local function fireAction(_, state)
-        if state == Enum.UserInputState.Begin and settings.SilentAim and not blocked() then
-            beginClick(false)
+        if syntheticInput then return Enum.ContextActionResult.Pass end
+        if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+            local consumed = consumedClick
+            consumedClick = false
+            return consumed and Enum.ContextActionResult.Sink or Enum.ContextActionResult.Pass
+        end
+        if state ~= Enum.UserInputState.Begin or not settings.SilentAim or blocked() then
+            return Enum.ContextActionResult.Pass
+        end
+        if shot or pendingAcquire then consumedClick = true return Enum.ContextActionResult.Sink end
+        local camera = workspace.CurrentCamera
+        if not camera then return Enum.ContextActionResult.Pass end
+        local player, part = findTarget(camera, false)
+        -- A normal click stays normal when there is no valid target.
+        if player and beginClick(false, player, part) then
+            consumedClick = true
             return Enum.ContextActionResult.Sink
         end
-        if settings.SilentAim and not menuOpen then return Enum.ContextActionResult.Sink end
         return Enum.ContextActionResult.Pass
     end
     bindFireAction = function()
+        consumedClick = false
         ContextActionService:UnbindAction(ACTION)
-        ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000,
-            Enum.UserInputType.MouseButton1)
+        ContextActionService:BindActionAtPriority(ACTION, fireAction, false, 3000, Enum.UserInputType.MouseButton1)
     end
     bindFireAction()
-
-    bind(UserInputService.WindowFocusReleased, function()
-        focused = false
+    local function suspend()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
+        restoreAnti()
+        motionAim:Clear()
         setTarget(nil, nil)
-    end)
+        targetMarker.Visible = false
+    end
+    bind(UserInputService.WindowFocusReleased, function() focused = false suspend() end)
     bind(UserInputService.WindowFocused, function() focused = true end)
-    bind(UserInputService.TextBoxFocused, function()
-        pendingAcquire = nil
-        restoreShot(workspace.CurrentCamera, "Пауза")
-        setTarget(nil, nil)
-    end)
+    bind(UserInputService.TextBoxFocused, suspend)
 
     local function release(entry)
         local part = entry.Part
@@ -1278,8 +1879,8 @@ local function startCombat()
     end
 
     local function markDead(player, character)
-        if not character or deadCharacters[character] then return end
-        deadCharacters[character] = true
+        if not character then return end
+        Alive:MarkDead(character)
         local data = visuals[player]
         if data and data.Character == character then
             data.Eligible = false
@@ -1287,51 +1888,94 @@ local function startCombat()
             hide(data)
             releaseHighlight(data)
         end
-        if currentTarget == player then setTarget(nil, nil) end
-        if shot and shot.Player == player then restoreShot(workspace.CurrentCamera, "Цель умерла") end
-        pendingAcquire = nil
+        if currentTarget == player then
+            setTarget(nil, nil)
+            targetMarker.Visible = false
+        end
+        if shot and shot.Character == character then restoreShot(workspace.CurrentCamera, "Цель умерла") end
+        if pendingAcquire and pendingAcquire.Character == character then pendingAcquire = nil end
+        if player == localPlayer then suspend() end
+        metadataDue, candidateDue = 0, 0
     end
-
     local function watch(player)
         if watchers[player] then return end
-        local record = {Life = {}}
+        local record = {Life={}, HumanoidConnections={}}
         watchers[player] = record
-        local function attach(character)
+        local function clearLife()
             disconnect(record.Life)
-            if record.Character then restoreBody(record.Character) end
-            record.Life = {}
-            record.Character = character
-            record.Shattered = false
-            deadCharacters[character] = nil
-            local attachedHumanoid
-            local function attachHumanoid(humanoid)
-                if attachedHumanoid or not humanoid:IsA("Humanoid") then return end
-                attachedHumanoid = humanoid
-                local function onDead()
-                    local first = not deadCharacters[character]
-                    markDead(player, character)
-                    if first and not record.Shattered then
-                        record.Shattered = true
-                        disintegrate(character)
-                    end
-                end
-                record.Life[#record.Life + 1] = humanoid.HealthChanged:Connect(function(health)
-                    if health <= 0 then onDead() end
-                end)
-                record.Life[#record.Life + 1] = humanoid.Died:Connect(onDead)
-            end
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-            if humanoid then attachHumanoid(humanoid) end
-            record.Life[#record.Life + 1] = character.ChildAdded:Connect(attachHumanoid)
+            disconnect(record.HumanoidConnections)
+            record.Life, record.HumanoidConnections = {}, {}
+            record.Humanoid = nil
         end
-        record.Spawn = player.CharacterAdded:Connect(attach)
-        if player.Character then attach(player.Character) end
+        local function attach(character)
+            clearLife()
+            if record.Character then restoreBody(record.Character) end
+            Alive:Clear(character)
+            record.Character, record.Shattered = character, false
+            metadataDue = 0
+            local function onDead()
+                if record.Character ~= character then return end
+                local first = not deadCharacters[character]
+                markDead(player, character)
+                if first and not record.Shattered then
+                    record.Shattered = true
+                    disintegrate(character)
+                end
+            end
+            record.OnDead = onDead
+            local function attachHumanoid(humanoid)
+                if not humanoid:IsA("Humanoid") or record.Humanoid == humanoid then return end
+                disconnect(record.HumanoidConnections)
+                record.HumanoidConnections = {}
+                record.Humanoid = humanoid
+                local function check()
+                    if humanoid.Health <= 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead then onDead() end
+                end
+                local list = record.HumanoidConnections
+                list[#list + 1] = humanoid.HealthChanged:Connect(check)
+                list[#list + 1] = humanoid.Died:Connect(onDead)
+                list[#list + 1] = humanoid.StateChanged:Connect(check)
+                check() -- Handles a corpse that existed before Spectra was loaded.
+            end
+            record.Life[#record.Life + 1] = character.ChildAdded:Connect(attachHumanoid)
+            record.Life[#record.Life + 1] = character.ChildRemoved:Connect(function(child)
+                if child == record.Humanoid then
+                    disconnect(record.HumanoidConnections)
+                    record.HumanoidConnections, record.Humanoid = {}, nil
+                    local data = visuals[player]
+                    if data then hide(data) releaseHighlight(data) end
+                    metadataDue = 0
+                    local nextHumanoid = GameAdapter:GetHumanoid(character)
+                    if nextHumanoid then attachHumanoid(nextHumanoid) end
+                end
+            end)
+            local humanoid = GameAdapter:GetHumanoid(character)
+            if humanoid then attachHumanoid(humanoid) end
+        end
+        local addedSignal = GameAdapter:GetCharacterAddedSignal(player)
+        local removingSignal = GameAdapter:GetCharacterRemovingSignal(player)
+        if addedSignal then record.Spawn = addedSignal:Connect(attach) end
+        if removingSignal then
+            record.Removing = removingSignal:Connect(function(character)
+                markDead(player, character)
+                if record.Character == character then
+                    clearLife()
+                    restoreBody(character)
+                    record.Character, record.OnDead = nil, nil
+                end
+            end)
+        end
+        local currentCharacter = GameAdapter:GetCharacter(player)
+        if currentCharacter then attach(currentCharacter) end
     end
     local function unwatch(player)
         local record = watchers[player]
         if not record then return end
-        record.Spawn:Disconnect()
+        markDead(player, record.Character)
+        if record.Spawn then record.Spawn:Disconnect() end
+        if record.Removing then record.Removing:Disconnect() end
         disconnect(record.Life)
+        disconnect(record.HumanoidConnections)
         if record.Character then restoreBody(record.Character) end
         watchers[player] = nil
     end
@@ -1342,6 +1986,8 @@ local function startCombat()
     function controller:Pause()
         pendingAcquire = nil
         restoreShot(workspace.CurrentCamera, "Пауза")
+        restoreAnti()
+        motionAim:Clear()
         setTarget(nil, nil)
         candidateDue = 0
         autoFireDue = 0
@@ -1353,31 +1999,78 @@ local function startCombat()
     function controller:Update(dt, camera, now)
         if not self.Running then return end
         smoothFPS = smoothFPS + (1 / math.max(dt, 0.001) - smoothFPS) * math.min(dt * 3, 1)
+        -- Events hide immediately; polling catches missed/deferred health and state events.
+        for _, record in pairs(watchers) do
+            local h = record.Humanoid
+            if h and record.OnDead and not deadCharacters[record.Character]
+                and (h.Health <= 0 or h:GetState() == Enum.HumanoidStateType.Dead) then record.OnDead() end
+        end
         local suspended = blocked()
-        reticle.Visible = settings.SilentAim and not suspended
+        local aiming = settings.SilentAim or settings.AimEnabled
+        reticle.Visible = aiming and not suspended
         if suspended then
-            pendingAcquire = nil
-            restoreShot(camera, "Пауза")
-            setTarget(nil, nil)
+            suspend()
         else
+            if not settings.SilentAim then
+                pendingAcquire = nil
+                if shot and not shot.NoFlick then restoreShot(camera) end
+            end
+
             acquireForShot(camera, now)
             if shot then
                 updateShot(camera, now)
-            elseif settings.SilentAim and now >= candidateDue then
-                local player, part = findTarget(camera)
-                setTarget(player, part)
-                candidateDue = now + TARGET_REFRESH
-                self.Status = player and ("Цель: " .. player.DisplayName) or "Нет видимой цели"
-            elseif not settings.SilentAim then
-                pendingAcquire = nil
-                setTarget(nil, nil)
-                self.Status = "Наведение выключено"
-            end
-        end
+            else
+                local silentPoint
+                if settings.SilentAim then
+                    if currentTarget and currentPart then
+                        updateFilter(camera)
+                        local character = GameAdapter:GetCharacter(currentTarget)
+                        silentPoint = enemyAlive(currentTarget) and character
+                            and currentPart:IsDescendantOf(character)
+                            and validPoint(camera, currentPart, character, true)
+                        if not silentPoint then
+                            setTarget(nil, nil)
+                            candidateDue = 0
+                        end
+                    end
 
-        if settings.SilentAim and settings.AutoFire and not suspended and not shot and not pendingAcquire
-            and currentTarget and enemyAlive(currentTarget) and now >= autoFireDue then
-            if beginClick(true) then autoFireDue = now + AUTO_FIRE_GAP end
+                    if not currentTarget and now >= candidateDue then
+                        local player, part, foundPoint = findTarget(camera, true, settings.AimPart)
+                        setTarget(player, part)
+                        silentPoint = foundPoint
+                        candidateDue = now + TARGET_REFRESH
+                    end
+                else
+                    setTarget(nil, nil)
+                end
+
+                updateFilter(camera)
+                local source = resolveAutoSource()
+                local forceMotion = source == "Motion"
+                local motionPlayer, motionPart, motionPoint = motionAim:Update(
+                    dt, camera, rayParams, false, forceMotion, now
+                )
+                local motionCharacter = motionPlayer and GameAdapter:GetCharacter(motionPlayer) or nil
+
+                if not settings.SilentAim then
+                    setTarget(motionPlayer, motionPart)
+                end
+
+                if settings.AutoFire and now >= autoFireDue then
+                    if source == "Silent" and settings.SilentAim and currentTarget
+                        and currentPart and not pendingAcquire then
+                        if beginClick(true, currentTarget, currentPart) then
+                            autoFireDue = now + settings.FireInterval / 1000
+                        end
+                    elseif source == "Motion" and motionPlayer and motionCharacter
+                        and motionPart and motionPoint and motionAim:IsAligned(camera) then
+                        if beginMotionAuto(camera, motionPlayer, motionCharacter, motionPart, motionPoint, now) then
+                            autoFireDue = now + settings.FireInterval / 1000
+                        end
+                    end
+                end
+            end
+            updateAnti(dt, camera, now)
         end
 
         targetMarker.Visible = false
@@ -1407,9 +2100,9 @@ local function startCombat()
                 targetMarker.Visible = true
             end
         end
-        combatStatus.Visible = settings.SilentAim and not menuOpen
-        combatStatus.Text = string.format("%s  /  %s  /  FIND 25 ms  /  SHOT 10 ms  /  FOV %.0f°",
-            self.Status, settings.AutoFire and "AUTO FIRE" or "CLICK", settings.AimFOV)
+        combatStatus.Visible = (settings.SilentAim or settings.AimEnabled or settings.AntiAim) and not menuOpen
+        combatStatus.Text = string.format("%s / %s / %s / FOV %.0f°",
+            self.Status, settings.FireMethod, settings.AutoFire and "AUTO" or "CLICK", settings.AimFOV)
 
         effectClock = effectClock + dt
         if effectClock >= 1 / 30 then
@@ -1444,7 +2137,9 @@ local function startCombat()
         self.Running = false
         pendingAcquire = nil
         ContextActionService:UnbindAction(ACTION)
+        RunService:UnbindFromRenderStep(PRE_CAMERA)
         restoreShot(workspace.CurrentCamera)
+        restoreAnti()
         disconnect(serviceConnections)
         for player in pairs(watchers) do unwatch(player) end
         for character in pairs(hiddenBodies) do restoreBody(character) end
@@ -1463,7 +2158,12 @@ local combat = startCombat()
 cleanup = function()
     if not alive then return end
     alive = false
+    closeDropdown()
     combat:Stop()
+    thirdPerson:Stop()
+    telemetry:Stop()
+    chams:Stop()
+    environment:Stop()
     RunService:UnbindFromRenderStep(RENDER_NAME)
     for _, connection in ipairs(connections) do connection:Disconnect() end
     for _, motion in pairs(activeTweens) do motion:Cancel() end
@@ -1473,7 +2173,7 @@ cleanup = function()
 end
 connect(shutdown.Event, cleanup)
 connect(gui.Destroying, cleanup)
-connect(script.Destroying, cleanup)
+if typeof(script) == "Instance" then connect(script.Destroying, cleanup) end
 connect(Players.PlayerAdded, addPlayer)
 connect(Players.PlayerRemoving, removePlayer)
 for _, player in ipairs(Players:GetPlayers()) do addPlayer(player) end
@@ -1499,14 +2199,18 @@ local function render(dt)
     end
     if (camera.ViewportSize - lastViewport).Magnitude > 0.5 then updateLayout(camera.ViewportSize) end
     local now = os.clock()
+    environment:Update(camera, now)
+    thirdPerson:Update()
     combat:Update(dt, camera, now)
-    local localCharacter = localPlayer.Character
-    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+    telemetry:Update(camera, now)
+    chams:Update(now)
+    local localCharacter = GameAdapter:GetCharacter(localPlayer)
+    local localRoot = localCharacter and GameAdapter:GetRoot(localCharacter)
     local origin = localRoot and localRoot.Position or camera.CFrame.Position
     local ignore = {camera}
     if localCharacter then ignore[#ignore + 1] = localCharacter end
     rayParams.FilterDescendantsInstances = ignore
-    rayBudget = 56
+    rayBudget = settings.VisibilitySampling == "Dense" and 160 or (settings.VisibilitySampling == "Balanced" and 96 or 56)
     if now >= metadataDue then updateMetadata(camera, origin, now) end
     radar.Visible = settings.Enabled and settings.Radar
     local count = 0
@@ -1515,7 +2219,7 @@ local function render(dt)
     end
     smoothedFPS = smoothedFPS + ((1 / math.max(dt, 0.001)) - smoothedFPS) * math.min(dt * 3, 1)
     if now >= statsDue then
-        footer.Text = string.format("%s  ·  %d игроков     /     %d FPS     /     RightShift — меню", profileName, count, math.floor(smoothedFPS + 0.5))
+        footer.Text = footerHint or string.format("%s  |  %s  |  %d players  |  %d fps                         INS / RSHIFT", BRAND_NAME, profileName, count, math.floor(smoothedFPS + 0.5))
         radarTitle.Text = string.format("RADAR  /  %d st", settings.RadarRange)
         statsDue = now + 0.4
     end
@@ -1529,3 +2233,41 @@ RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 50, 
         cleanup()
     end
 end)
+
+-- Portable creator API: no PlaceId, RemoteEvent names or weapon/server paths.
+local api = {Version="10.0.0"}
+function api:Set(key,value)
+    if not alive then return false,"Spectra is unloaded" end
+    return setSetting(key,value)
+end
+function api:GetSettings()
+    local copy={}
+    for key,value in pairs(settings) do copy[key]=value end
+    return copy
+end
+function api:SetInputAdapter(adapter)
+    if not alive then return false,"Spectra is unloaded" end
+    if adapter ~= nil and (type(adapter) ~= "table" or type(adapter.Press) ~= "function"
+        or type(adapter.Release) ~= "function") then return false,"Expected Press and Release functions" end
+    combat:Pause()
+    creatorInputAdapter=adapter and {Press=adapter.Press,Release=adapter.Release} or nil
+    return true
+end
+function api:SetGameAdapter(adapter)
+    if not alive then return false,"Spectra is unloaded" end
+    combat:Pause()
+    local ok, reason = GameAdapter:SetCustom(adapter)
+    if ok then metadataDue = 0 end
+    return ok, reason
+end
+function api:GetState()
+    return {
+        Running=alive,Target=combat.Target,Status=combat.Status,MenuOpen=menuOpen,
+        AutoFireSource=settings.AutoFireSource,WorldMode=settings.WorldLightingMode,
+    }
+end
+function api:OpenMenu(open)
+    if alive then setMenuOpen(open ~= false) end
+end
+function api:Unload() cleanup() end
+return api

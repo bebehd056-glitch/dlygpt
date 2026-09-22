@@ -1,18 +1,28 @@
 # Spectra
 
-Remote-loadable Spectra build.
+Spectra v10 — переносимый Roblox client SDK для FPS/HvH плейсов: Silent Aim, Motion Aim, Auto Fire routing, ESP/chams, third person, anti-aim и клиентский world/shader stack.
 
-## Structure
+Главный принцип v10: runtime не привязан к конкретному серверу. В нём нет PlaceId/GameId, имён оружейных RemoteEvent или жёстких путей до объектов конкретной игры.
 
-- `Spectra/main.lua` — current working build.
-- `Spectra/loader.lua` — tiny loader that fetches the main build.
+- `Spectra/main.lua` — координатор UI/render/combat.
+- `Spectra/loader.lua` — модульный remote loader.
+- `Spectra/core/game_adapter.lua` — необязательный слой для нестандартного Character/HP/teams.
+- `Spectra/combat/motion_aim.lua` — второй вид aim с регулируемой угловой скоростью и randomization.
+- `Spectra/world/environment.lua` — Aurora / Color World / Fog / Bloom / Blur / Sun Rays / DOF.
+- `Spectra/visuals/chams.lua` — portable Highlight chams.
+- [Полное описание v10](Spectra/README.md).
+- [API для place-makers](Spectra/CREATOR_API.md).
+- `python Spectra/tests/modular_static.py` — portability/structure regression checks.
 
-## Loader
+Основная ветка пока оставлена на стабильной версии.
+
+Текущая v10 development-ветка:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/main/Spectra/loader.lua", true))()
+loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/spectra-v7-rework/Spectra/loader.lua",
+    true
+))()
 ```
 
-The repository is currently private. GitHub raw URLs are not anonymously accessible while it remains private. To use the raw loader directly, make the repository public or use a private authenticated host.
-
-Current build: click silent aim + optional Auto Fire, 25 ms acquisition, 10 ms pre-fire delay, FOV up to 360 degrees, shared partial-head visibility logic for ESP/aim, head markers, animated target focus, and no third-person camera.
+После проверки v10 в живом Roblox-плейсе ветку можно сливать в `main`.

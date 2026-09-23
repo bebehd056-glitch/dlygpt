@@ -1,18 +1,33 @@
-# Spectra
+# SolPlan for Codex
 
-Remote-loadable Spectra build.
+Two-stage Codex workflow inspired by Claude Code's planning workflows:
 
-## Structure
+1. **GPT-5.6 Sol + high reasoning** analyzes the task and produces a compact implementation plan.
+2. **GPT-5.6 Luna** executes that plan and edits/tests the project.
+3. Sol is kept out of the long implementation loop to reduce expensive-model usage.
 
-- `Spectra/main.lua` — current working build.
-- `Spectra/loader.lua` — tiny loader that fetches the main build.
+## Install marketplace
 
-## Loader
-
-```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/bebehd056-glitch/dlygpt/main/Spectra/loader.lua", true))()
+```powershell
+codex plugin marketplace add bebehd056-glitch/dlygpt --ref main
 ```
 
-The repository is currently private. GitHub raw URLs are not anonymously accessible while it remains private. To use the raw loader directly, make the repository public or use a private authenticated host.
+Then install/enable **solplan** from the Codex/ChatGPT Plugins Directory and invoke:
 
-Current build: click silent aim + optional Auto Fire, 25 ms acquisition, 10 ms pre-fire delay, FOV up to 360 degrees, shared partial-head visibility logic for ESP/aim, head markers, animated target focus, and no third-person camera.
+```
+$solplan <your task>
+```
+
+## Direct Windows runner
+
+If you want strict model routing from a terminal (Sol High -> Luna), clone the repo and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\plugins\solplan\scripts\solplan.ps1 "your task"
+```
+
+The runner uses your existing `codex` CLI authentication. No API key is required.
+
+## Important
+
+The plugin workflow can orchestrate Codex, but actual subscription/rate-limit accounting is controlled by OpenAI. This project does not bypass limits. It aims to reduce Sol usage by moving the implementation phase to Luna.

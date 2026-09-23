@@ -1,0 +1,20 @@
+{
+  "name": "dlygpt-solplan",
+  "interface": {
+    "displayName": "SolPlan"
+  },
+  "plugins": [
+    {
+      "name": "solplan",
+      "source": {
+        "source": "local",
+        "path": "./plugins/solplan"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

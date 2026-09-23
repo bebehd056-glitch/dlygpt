@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "solplan",
+  "version": "1.0.0",
+  "description": "Plan with GPT-5.6 Sol High, execute with GPT-5.6 Luna to reduce expensive-model usage."
+}

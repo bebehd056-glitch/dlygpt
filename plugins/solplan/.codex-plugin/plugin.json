@@ -1,0 +1,6 @@
+{
+  "name": "solplan",
+  "version": "1.0.0",
+  "description": "Plan with GPT-5.6 Sol High, execute with GPT-5.6 Luna.",
+  "skills": "./skills/"
+}
